@@ -207,7 +207,7 @@ class KnowledgeStore(Protocol):
 
 ### Flat File Format
 
-Each concept is a YAML file. Edges are stored on the source node's file. The SQLite index handles bidirectional lookups. Filenames are slugified concept names; collisions get a short hash suffix.
+Each concept is a YAML file. Edges are stored on the source node's file, referencing targets by slugified name (e.g., `"fraud-detection"`). During index rebuild, slug references are resolved to UUIDs using the `name` field of each concept file. The SQLite index handles bidirectional lookups using UUIDs internally. Filenames are slugified concept names; collisions get a short hash suffix.
 
 ```yaml
 # ~/.a-priori/my-project/graph/payment-validation.yaml
@@ -308,7 +308,7 @@ Graph traversal from a starting concept.
 | `create_concept` | `name, description, labels?, code_references?` | Created concept |
 | `update_concept` | `id_or_name, changes` | Updated concept |
 | `delete_concept` | `id_or_name` | Confirmation |
-| `create_edge` | `source, target, edge_type, metadata?` | Created edge |
+| `create_edge` | `source (id or name), target (id or name), edge_type, metadata?` | Created edge |
 | `update_edge` | `id, changes` | Updated edge |
 | `delete_edge` | `id` | Confirmation |
 | `report_gap` | `description, context?` | Created work item in maintenance backlog |
@@ -416,8 +416,8 @@ embeddings:
   model: "text-embedding-3-small"
 
 scheduling:
-  diff_check: "*/30 * * * *"
-  deepening_loop: "0 */4 * * *"
+  diff_check: "*/30 * * * *"             # cron expressions — executed by OS cron or external scheduler
+  deepening_loop: "0 */4 * * *"          # A-Priori does not self-schedule; user configures cron/launchd to invoke shells
 
 priority_weights:
   staleness: 0.3
