@@ -1,2 +1,2 @@
 # A-Priori
-A living knowledge base.
+Define your ontology.
