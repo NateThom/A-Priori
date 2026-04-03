@@ -13,7 +13,7 @@ These must be resolved before epics can be written. Their answers change interfa
 | ID | Spike | Status | Blocks | Est. Hours | Decision Record |
 |----|-------|--------|--------|------------|-----------------|
 | S-1 | Async Architecture | done | All epics (interface signatures) | 2-3 | [S-1-async-architecture.md](./S-1-async-architecture.md) |
-| S-2 | Embedding Strategy | not-started | Storage layer epic (vec0 dimensions) | 3-4 | — |
+| S-2 | Embedding Strategy | done | Storage layer epic (vec0 dimensions) | 3-4 | [S-2-embedding-strategy.md](./S-2-embedding-strategy.md) |
 | S-6 | MCP Python SDK | not-started | MCP epic (may feed back into S-1) | 2 | — |
 
 ## Spikes That Block Epic Implementation
@@ -37,9 +37,10 @@ These can be scheduled as first-stories within their parent epics. The epic can 
 **Why it blocks:** Async vs. sync changes every function signature in the system. Can't write epic acceptance criteria that reference interfaces without knowing this.
 **Decision:** Sync core, async boundaries. See [decision record](./S-1-async-architecture.md).
 
-### S-2: Embedding Strategy
+### S-2: Embedding Strategy (DONE)
 **Question:** Which embedding model and dimensions should we use for sqlite-vec? What's the cost/quality trade-off for local vs. API embeddings?
 **Why it blocks:** The `vec0` virtual table requires a fixed embedding dimension at creation time. Can't define the storage schema without this.
+**Decision:** Local `e5-base-v2` via `sentence-transformers`, 768 dimensions, cosine distance. See [decision record](./S-2-embedding-strategy.md).
 
 ### S-3: Tree-sitter Grammar Quality
 **Question:** How complete is tree-sitter's Python and TypeScript grammar coverage for our extraction needs? What structural entities does it miss?
