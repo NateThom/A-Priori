@@ -40,7 +40,7 @@ When N librarians each have an LLM call in flight, those calls must be concurren
 
 ### The MCP SDK requires async, but the bridge is clean
 
-The MCP Python SDK is async-native. Tool handlers must be `async def`. But `asyncio.to_thread()` cleanly bridges sync-to-async at this boundary. The MCP handler is thin glue — parse input, call sync core in a thread, format and return. The async overhead is in the shell, not the substance.
+The MCP Python SDK is async-native, built on `anyio` (not raw `asyncio`). Its high-level API (FastMCP) supports plain `def` tool handlers — it automatically bridges them to async via `anyio.to_thread.run_sync()`. We don't write bridging code ourselves; the MCP handler is a plain sync function that calls the sync core directly. (See S-6 decision record for details.)
 
 ### SQLite's concurrency model makes async storage pointless
 
@@ -106,17 +106,19 @@ async def run_single_iteration(store: KnowledgeStore, adapter: LLMAdapter, item:
 
 ### MCP Tool Handler Pattern
 
+**Updated by S-6:** The MCP Python SDK uses FastMCP, which automatically bridges sync handlers to async via `anyio.to_thread.run_sync()`. We don't write the async bridging ourselves — handlers are plain `def` functions. A `safe_tool` decorator handles error translation (see S-6 for details).
+
 ```python
-@mcp_server.tool()
-async def search(query: str, mode: str = "keyword") -> list[dict]:
-    """MCP tool — async shell, sync core."""
-    results = await asyncio.to_thread(store.search_keyword, query)
-    return format_results(results)
+@mcp.tool()
+@safe_tool
+def search(query: str, mode: str = "keyword") -> list[dict]:
+    """MCP tool — sync handler, FastMCP bridges to async automatically."""
+    return retrieval.search(store, query, mode=mode)
 ```
 
 ### Thread Safety Requirements
 
-Because sync core functions run in thread pool threads (via `to_thread()`), SQLite connections must be per-thread. WAL mode plus per-thread connections from a connection pool provides safe concurrent access. This is well-trodden territory — no novel concurrency challenges.
+Because sync core functions run in thread pool threads (via `anyio.to_thread.run_sync()` at the MCP boundary, `asyncio.to_thread()` at the audit UI boundary), SQLite connections must be per-thread. WAL mode plus per-thread connections from a connection pool provides safe concurrent access. This is well-trodden territory — no novel concurrency challenges.
 
 ## What This Decision Does NOT Cover
 

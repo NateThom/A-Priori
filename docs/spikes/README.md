@@ -14,7 +14,7 @@ These must be resolved before epics can be written. Their answers change interfa
 |----|-------|--------|--------|------------|-----------------|
 | S-1 | Async Architecture | done | All epics (interface signatures) | 2-3 | [S-1-async-architecture.md](./S-1-async-architecture.md) |
 | S-2 | Embedding Strategy | done | Storage layer epic (vec0 dimensions) | 3-4 | [S-2-embedding-strategy.md](./S-2-embedding-strategy.md) |
-| S-6 | MCP Python SDK | not-started | MCP epic (may feed back into S-1) | 2 | — |
+| S-6 | MCP Python SDK | done | MCP epic (may feed back into S-1) | 2 | [S-6-mcp-python-sdk.md](./S-6-mcp-python-sdk.md) |
 
 ## Spikes That Block Epic Implementation
 
@@ -54,9 +54,10 @@ These can be scheduled as first-stories within their parent epics. The epic can 
 **Question:** At what graph size does the dual-write YAML strategy become a bottleneck? What's the read/write performance curve?
 **Why it doesn't block definition:** The storage epic is defined around the `KnowledgeStore` protocol. YAML performance only matters at scale and can be addressed with a migration path.
 
-### S-6: MCP Python SDK
+### S-6: MCP Python SDK (DONE)
 **Question:** Does the SDK have quirks in tool registration, lifecycle management, or transport that affect our architecture? Does it mandate a specific async framework?
 **Why it partially blocks:** If the SDK mandates a specific async framework or has an unexpected execution model, that feeds back into S-1. Low risk given S-1 already accounts for the SDK being async-native.
+**Decision:** FastMCP with sync tool handlers, pinned to v1.x. SDK uses anyio (not raw asyncio), but this is compatible with S-1. FastMCP auto-bridges sync handlers to async. S-1 amended to reflect this. See [decision record](./S-6-mcp-python-sdk.md).
 
 ### S-7: Audit UI Technology
 **Question:** FastAPI + htmx? FastAPI + React SPA? Flask? What's the right stack for a local-only audit UI?
