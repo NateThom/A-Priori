@@ -276,10 +276,12 @@ Each story below follows this structure:
 - Given a WorkItem with `failure_count = 2` and escalation threshold of 3, when `record_failure` is called, then `failure_count` becomes 3 but `escalated` remains False (escalation is a separate call).
 - Given a WorkItem, when `escalate_work_item` is called, then `escalated` is set to True.
 - Given multiple threads reading concurrently, when the store is accessed, then no locking errors occur (WAL mode enables concurrent reads).
+- Given work items in various states (resolved, unresolved, escalated), when `get_work_item_stats` is called, then it returns aggregate counts (total, resolved, unresolved, escalated) and queue depth.
+- Given resolved work items older than a configured retention period, when `delete_old_work_items(days)` is called, then resolved work items (and their failure records) older than the specified number of days are deleted and the count of deleted items is returned.
 
 **Technical Notes:** The `failure_records` column is `TEXT NOT NULL DEFAULT '[]'` storing a JSON array. The index for work items must be created on `base_priority_score DESC`, not `priority_score`.
 
-**Definition of Done:** All work item operations working (create, record_failure, escalate, get_escalated_items). Edge referential integrity enforced. Unit tests for work item lifecycle and concurrent access.
+**Definition of Done:** All work item operations working (create, record_failure, escalate, get_escalated_items, get_work_item_stats, delete_old_work_items). Edge referential integrity enforced. Unit tests for work item lifecycle, retention cleanup, and concurrent access.
 
 **Intra-epic dependencies:** Story 2.3a (schema and connection management must exist).
 
@@ -411,7 +413,7 @@ Each story below follows this structure:
 - Given the test suite, when a new backend implementation is added, then it can be plugged in with zero test modifications (tests are parameterized by implementation).
 - Given the test suite, when reviewed for coverage, then every protocol method has at least one positive test and one negative/edge-case test.
 
-**Technical Notes:** Use pytest fixtures with parameterization: `@pytest.fixture(params=[SqliteStore, DualWriter])`. The suite should cover: CRUD for all entities, search (semantic and keyword), graph traversal, work item lifecycle (create → fail → fail → fail → escalate), review outcome recording, metrics queries, and rebuild-index.
+**Technical Notes:** Use pytest fixtures with parameterization: `@pytest.fixture(params=[SqliteStore, DualWriter])`. The suite should cover: CRUD for all entities, search (semantic and keyword), graph traversal, work item lifecycle (create → fail → fail → fail → escalate), work item retention cleanup (`delete_old_work_items`), review outcome recording, metrics queries, and rebuild-index.
 
 **Definition of Done:** Test suite implemented and passing against both implementations. Suite is parameterized for future backends. Coverage report confirms all protocol methods are tested.
 
@@ -1082,6 +1084,8 @@ Each story below follows this structure:
 **Epic goal:** Wire together adapters, quality, knowledge manager, and priority into an autonomous analysis loop.
 **PRD sections:** §6.1, §6.2, §6.5
 **ERD sections:** §4.2, §4.8
+
+> **Note for Engineering Lead:** Epic 10 is designated "Large" in the Epics document but contains only 3 stories. For comparison, other Large epics (Epic 2: 9 stories, Epic 11: 7 stories) are more granular. Story 10.1 (Loop Execution) in particular is an integration-heavy story covering the full 10-step orchestration sequence and will likely need further decomposition during sprint planning.
 
 ---
 

@@ -231,7 +231,7 @@ Work items represent units of analysis work for the librarian agents. They are p
 | `description` | string | What needs to be done |
 | `concept_id` | optional UUID | Related concept, if applicable |
 | `file_path` | optional string | Related file, if applicable |
-| `priority_score` | float | Computed advisory priority |
+| `base_priority_score` | float | Computed advisory priority |
 | `resolved` | bool | Whether this item has been completed |
 | `failure_count` | int | Number of times this item has been attempted and failed quality verification |
 | `failure_records` | list[FailureRecord] | Structured history of previous failed attempts (see below) |
