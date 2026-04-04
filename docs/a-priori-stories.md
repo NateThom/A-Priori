@@ -459,11 +459,11 @@ Each story below follows this structure:
 - Given a `.gitignore`-excluded directory like `node_modules/`, when the orchestrator runs, then those files are skipped.
 - Given a file with an unrecognized extension, when encountered, then it is skipped with a debug log message.
 - Given a file larger than the configured max file size, when encountered, then it is skipped with a warning.
-- Given 100 source files, when the orchestrator processes them, then total wall-clock time is under 100 seconds (sub-second per file per PRD §4.1).
+- Given 100 source files, when the orchestrator processes them, then total wall-clock time is under 5 seconds (fitting within the 60-second window for 1,000 files per Story 5.1).
 
 **Technical Notes:** Language detection by extension: `.py` → Python, `.ts`/`.tsx` → TypeScript, `.js`/`.jsx` → JavaScript (use TypeScript parser). The orchestrator should yield `(file_path, language, parse_result)` tuples for downstream processing by the graph builder.
 
-**Definition of Done:** Orchestrator traverses file tree correctly. Include/exclude globs working. Language dispatch working. Performance verified at sub-second per file.
+**Definition of Done:** Orchestrator traverses file tree correctly. Include/exclude globs working. Language dispatch working. Performance verified at ≤0.05s per file (100 files in under 5 seconds).
 
 **Intra-epic dependencies:** Story 3.1 (S-3 spike findings inform what to expect from parsers).
 
@@ -530,6 +530,7 @@ Each story below follows this structure:
 - Given a function that was renamed, when the builder runs on the updated code, then the old concept is updated (not duplicated) and its `updated_at` is refreshed.
 - Given parse results, when the builder runs, then every concept has at least one CodeReference with a valid `content_hash` (SHA-256 of the referenced code block).
 - Given parse results containing a function with parameters and return types, when the graph builder runs, then the created concept node stores those parameters and return types inside its `metadata` dictionary.
+- Given parse results, when the graph builder runs, then every created/updated concept and edge is stamped with the current git HEAD hash in the `derived_from_code_version` field.
 
 **Technical Notes:** "Fully-qualified symbol name" means `file_path::class_name::method_name` or `file_path::function_name`. This is the upsert key. The builder should use the KnowledgeStore's `create_concept` and `create_edge` methods (or a bulk upsert variant if needed for performance).
 
@@ -1514,7 +1515,7 @@ Each story below follows this structure:
 **Acceptance Criteria:**
 
 - Given `apriori librarian run --iterations 10 --budget 50000`, when run, then the librarian executes up to 10 iterations within a 50,000 token budget.
-- Given `apriori librarian status`, when run, then it displays the current work queue depth, last run timestamp, and recent iteration results.
+- Given `apriori librarian status`, when run, then it displays detailed iteration yield, token spend history, and specific failure logs for the last 5 runs (supplementing the general health overview in `apriori status`).
 - Given `apriori concept "PaymentValidator"`, when run, then the full concept details are displayed (description, code references, edges, confidence, timestamps).
 - Given `apriori validate`, when run, then integrity checks verify: all edge references point to existing concepts, all code references have valid file paths, no orphaned YAML files, SQLite matches YAML.
 - Given `apriori export --format json`, when run, then the full knowledge graph is exported as a single JSON file.

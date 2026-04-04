@@ -422,7 +422,7 @@ The adapter must return the model name as a string in the response metadata — 
 
 #### 4.1.2 Anthropic Adapter and Ollama Adapter
 
-Anthropic adapter wraps the Anthropic Python SDK. Ollama adapter wraps the Ollama HTTP API (typically `localhost:11434`). Ollama adapter must handle the case where Ollama is not running with a clear error message.
+Anthropic adapter wraps the Anthropic Python SDK. Ollama adapter wraps the Ollama HTTP API (typically `localhost:11434`). Ollama adapter must handle the case where Ollama is not running with a clear error message. Token counting for Ollama models uses a rough heuristic of `characters / 4` since Ollama does not expose a tokenizer API; this approximation is sufficient for budget enforcement and token-spend tracking.
 
 Both adapters are used in two contexts: (1) the librarian's primary analysis call, and (2) the co-regulation review call. The co-regulation review may use the same model or a different one, determined by configuration. The adapter does not need to know which context it's being called from — the caller provides the prompt and the adapter executes it.
 
