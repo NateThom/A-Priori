@@ -78,7 +78,7 @@ Each story below follows this structure:
 
 #### Story 1.1: Concept, CodeReference, and Impact Models
 
-**As a** developer implementing the storage layer, **I want** validated Pydantic models for Concept and CodeReference **so that** every module in the system works against a single, well-validated schema definition with clear serialization contracts.
+**As the** storage layer, **I want** validated Pydantic models for Concept and CodeReference **so that** every module in the system works against a single, well-validated schema definition with clear serialization contracts.
 
 **Context:** The Concept node is the fundamental unit of knowledge in the graph. CodeReference is embedded within Concept and implements the repair chain (symbol → content_hash → semantic_anchor). These are the most-imported models in the entire codebase — every layer references them. PRD §5.1, §5.2; ERD §3.1.1, §3.1.2.
 
@@ -103,7 +103,7 @@ Each story below follows this structure:
 
 #### Story 1.2: Edge Model and Edge Type Vocabulary
 
-**As a** developer implementing the storage or structural engine, **I want** a validated Edge model and a loadable edge type vocabulary **so that** all relationship data is typed against a controlled vocabulary and edges with invalid types are rejected at creation time.
+**As the** storage and structural engine, **I want** a validated Edge model and a loadable edge type vocabulary **so that** all relationship data is typed against a controlled vocabulary and edges with invalid types are rejected at creation time.
 
 **Context:** Edges are directed relationships between concepts. The edge type vocabulary is organized into three categories (structural, semantic, historical) and loaded from configuration. PRD §5.3, §5.4; ERD §3.1.3.
 
@@ -125,7 +125,7 @@ Each story below follows this structure:
 
 #### Story 1.3: WorkItem and FailureRecord Models
 
-**As a** developer implementing the librarian or quality pipeline, **I want** validated WorkItem and FailureRecord models with all failure-tracking fields **so that** the work queue, failure breadcrumbs, and escalation state are well-defined from day one and the SQLite schema doesn't need migration later.
+**As the** librarian and quality pipeline, **I want** validated WorkItem and FailureRecord models with all failure-tracking fields **so that** the work queue, failure breadcrumbs, and escalation state are well-defined from day one and the SQLite schema doesn't need migration later.
 
 **Context:** WorkItems are transient operational state (SQLite-only, not dual-written to YAML). FailureRecord is embedded in WorkItem and captures the diagnostic context of a failed librarian iteration. These models are defined in Phase 1 but exercised in Phase 2. PRD §5.6; ERD §3.1.4, §3.1.5.
 
@@ -147,7 +147,7 @@ Each story below follows this structure:
 
 #### Story 1.4: Quality and Review Models
 
-**As a** developer implementing the quality pipeline or audit UI, **I want** validated CoRegulationAssessment and ReviewOutcome models **so that** the data structures for the co-regulation review output and human review actions are defined consistently and available for Phase 2 implementation.
+**As the** quality pipeline and audit UI, **I want** validated CoRegulationAssessment and ReviewOutcome models **so that** the data structures for the co-regulation review output and human review actions are defined consistently and available for Phase 2 implementation.
 
 **Context:** These models are small and self-contained. CoRegulationAssessment captures the output of the Level 1.5 co-regulation review. ReviewOutcome captures a human reviewer's action from the Level 2 audit UI. Both are Phase 2 concerns but are defined here to keep the model layer complete. ERD §3.1.6, §3.1.7.
 
@@ -222,7 +222,7 @@ Each story below follows this structure:
 
 #### Story 2.2: KnowledgeStore Protocol Definition
 
-**As a** developer working on any layer of A-Priori, **I want** a complete, well-documented protocol definition for the KnowledgeStore **so that** I can code against the interface without depending on a specific implementation and future backend swaps require zero changes to my code.
+**As any** downstream module in A-Priori, **I want** a complete, well-documented protocol definition for the KnowledgeStore **so that** I can code against the interface without depending on a specific implementation and future backend swaps require zero changes to my code.
 
 **Context:** The KnowledgeStore protocol is the most important interface in the system. It defines the contract for all data operations. Both the SQLite implementation and the dual writer must satisfy it identically. ERD §3.2.1.
 
@@ -241,11 +241,11 @@ Each story below follows this structure:
 
 ---
 
-#### Story 2.3: SQLite Schema and Base CRUD Implementation
+#### Story 2.3a: SQLite Schema and Concept/Edge CRUD
 
-**As a** developer, **I want** a working SQLite implementation of the KnowledgeStore protocol with the full schema and basic CRUD operations **so that** concepts, edges, work items, and review outcomes can be persisted and retrieved.
+**As the** KnowledgeStore, **I want** a working SQLite implementation with the full schema, connection management, and CRUD operations for concepts and edges **so that** the core graph entities can be persisted and retrieved.
 
-**Context:** The SQLite store is the query-performance backbone. It implements the full schema from ERD §3.2.2 including tables for concepts, edges, work items, review outcomes, FTS5 for keyword search, and the vec0 table for vector search. This story covers schema creation, CRUD operations, and connection management. ERD §3.2.2.
+**Context:** The SQLite store is the query-performance backbone. It implements the full schema from ERD §3.2.2 including tables for concepts, edges, work items, review outcomes, FTS5 for keyword search, and the vec0 table for vector search. This story covers schema creation, connection management, and concept/edge CRUD. ERD §3.2.2.
 
 **Acceptance Criteria:**
 
@@ -254,23 +254,40 @@ Each story below follows this structure:
 - Given a Concept object, when `create_concept` is called, then the concept is inserted and the method returns the created Concept with all fields populated.
 - Given an existing concept, when `update_concept` is called with a modified description, then the concept's description and `updated_at` are updated in the database.
 - Given a concept with edges, when `delete_concept` is called, then the concept and all its edges are removed (CASCADE).
+
+**Technical Notes:** Connection management must be thread-safe — use per-thread connections (thread-local pattern or a simple pool) per S-1 decision. The `UNIQUE(source, target, edge_type)` constraint on edges prevents duplicate relationships. All timestamps stored as ISO 8601 text strings. The vec0 table uses `FLOAT[768]` dimensions per S-2 decision.
+
+**Definition of Done:** Full schema creation. Concept and edge CRUD operations working. Connection pooling working. Thread safety verified. Unit tests for CRUD methods including edge cases (duplicate names, referential integrity violations, concurrent access).
+
+**Intra-epic dependencies:** Story 2.2 (protocol definition to implement against).
+
+---
+
+#### Story 2.3b: SQLite Work Item Operations
+
+**As the** KnowledgeStore, **I want** CRUD operations for work items including failure tracking, escalation, and edge referential integrity enforcement **so that** the librarian's work queue is fully operational.
+
+**Context:** Work items are transient operational state stored only in SQLite. This story completes the SQLite store's write surface by adding work item lifecycle operations and edge validation. ERD §3.2.2.
+
+**Acceptance Criteria:**
+
 - Given an Edge referencing a non-existent concept, when `create_edge` is called, then a referential integrity error is raised.
 - Given a WorkItem, when `record_failure` is called with a FailureRecord, then the record is appended to `failure_records` JSON array and `failure_count` is incremented.
 - Given a WorkItem with `failure_count = 2` and escalation threshold of 3, when `record_failure` is called, then `failure_count` becomes 3 but `escalated` remains False (escalation is a separate call).
 - Given a WorkItem, when `escalate_work_item` is called, then `escalated` is set to True.
 - Given multiple threads reading concurrently, when the store is accessed, then no locking errors occur (WAL mode enables concurrent reads).
 
-**Technical Notes:** Connection management must be thread-safe — use per-thread connections (thread-local pattern or a simple pool) per S-1 decision. The `failure_records` column is `TEXT NOT NULL DEFAULT '[]'` storing a JSON array. The `UNIQUE(source, target, edge_type)` constraint on edges prevents duplicate relationships. All timestamps stored as ISO 8601 text strings. The vec0 table uses `FLOAT[768]` dimensions per S-2 decision. The index for work items must be created on `base_priority_score DESC`, not `priority_score`.
+**Technical Notes:** The `failure_records` column is `TEXT NOT NULL DEFAULT '[]'` storing a JSON array. The index for work items must be created on `base_priority_score DESC`, not `priority_score`.
 
-**Definition of Done:** Full schema creation. All CRUD operations for all four entity types. Connection pooling working. Thread safety verified. Unit tests for every CRUD method including edge cases (duplicate names, referential integrity violations, concurrent access).
+**Definition of Done:** All work item operations working (create, record_failure, escalate, get_escalated_items). Edge referential integrity enforced. Unit tests for work item lifecycle and concurrent access.
 
-**Intra-epic dependencies:** Story 2.2 (protocol definition to implement against).
+**Intra-epic dependencies:** Story 2.3a (schema and connection management must exist).
 
 ---
 
 #### Story 2.4: EmbeddingService Implementation
 
-**As a** developer implementing semantic search, **I want** an EmbeddingService that wraps `sentence-transformers` with the `e5-base-v2` model **so that** concept embeddings can be generated for storage and query embeddings can be generated for similarity search.
+**As the** semantic search subsystem, **I want** an EmbeddingService that wraps `sentence-transformers` with the `e5-base-v2` model **so that** concept embeddings can be generated for storage and query embeddings can be generated for similarity search.
 
 **Context:** Per S-2 spike decision, the system uses `intfloat/e5-base-v2` via `sentence-transformers` for local embedding generation. This produces 768-dimensional vectors. The model is ~440MB and is downloaded on first use to `~/.cache/huggingface/`. ERD §3.2.2 (embedding table); S-2 findings.
 
@@ -286,7 +303,7 @@ Each story below follows this structure:
 
 **Definition of Done:** EmbeddingService implemented with proper prefix handling. Model download with progress indication. Embedding generation verified for correctness. Performance measured (should be <50ms per embedding after model load).
 
-**Intra-epic dependencies:** None (can be developed in parallel with Story 2.3).
+**Intra-epic dependencies:** None (can be developed in parallel with Story 2.3a).
 
 ---
 
@@ -309,7 +326,7 @@ Each story below follows this structure:
 
 **Definition of Done:** Automatic embedding generation on concept create/update. Vector similarity search returning ranked results. FTS5 keyword search working. Deletion cleanup verified. Integration tests with realistic concept data.
 
-**Intra-epic dependencies:** Story 2.3 (SQLite store base), Story 2.4 (EmbeddingService).
+**Intra-epic dependencies:** Story 2.3a (SQLite store base), Story 2.3b (work item operations), Story 2.4 (EmbeddingService).
 
 ---
 
@@ -338,7 +355,7 @@ Each story below follows this structure:
 
 #### Story 2.7: Dual Writer Implementation
 
-**As a** developer using the storage layer, **I want** a single KnowledgeStore implementation that transparently coordinates writes to both SQLite and YAML **so that** I don't need to manage two backends manually and data consistency is maintained automatically.
+**As any** module writing to the knowledge graph, **I want** a single KnowledgeStore implementation that transparently coordinates writes to both SQLite and YAML **so that** I don't need to manage two backends manually and data consistency is maintained automatically.
 
 **Context:** The dual writer implements the KnowledgeStore protocol by delegating to both backends. It is the primary store used by all other modules. Write order: YAML first (authoritative), SQLite second (acceleration). SQLite failure is logged but does not roll back YAML. Reads served from SQLite. Work items and review outcomes are SQLite-only. ERD §3.2.4.
 
@@ -355,7 +372,7 @@ Each story below follows this structure:
 
 **Definition of Done:** Dual writer implemented and passing the protocol test suite (Story 2.9). Write coordination verified. SQLite failure tolerance tested. Read delegation to SQLite confirmed.
 
-**Intra-epic dependencies:** Story 2.3 (SQLite store), Story 2.5 (vector/FTS), Story 2.6 (YAML store).
+**Intra-epic dependencies:** Story 2.3a/2.3b (SQLite store), Story 2.5 (vector/FTS), Story 2.6 (YAML store).
 
 ---
 
@@ -383,7 +400,7 @@ Each story below follows this structure:
 
 #### Story 2.9: Protocol Test Suite
 
-**As a** developer maintaining the storage layer, **I want** a comprehensive test suite written against the KnowledgeStore protocol **so that** both the SQLite implementation and the dual writer can be verified against identical expectations and any future backend passes the same tests.
+**As an** engineer auditing the storage layer, **I want** a comprehensive test suite written against the KnowledgeStore protocol **so that** both the SQLite implementation and the dual writer can be verified against identical expectations and any future backend passes the same tests.
 
 **Context:** This is the highest-priority testing target in the entire project. The suite must exercise every protocol method with both valid and invalid inputs, including the failure-tracking methods and review outcome methods that Phase 2 will exercise. ERD §3.2.1.
 
@@ -432,7 +449,7 @@ Each story below follows this structure:
 
 #### Story 3.2: Parsing Orchestrator
 
-**As a** developer running `apriori init`, **I want** a file-tree walker that respects include/exclude patterns and dispatches each file to the correct language parser **so that** the structural engine processes only relevant source files efficiently.
+**As the** structural engine, **I want** a file-tree walker that respects include/exclude patterns and dispatches each file to the correct language parser **so that** the structural engine processes only relevant source files efficiently.
 
 **Context:** The orchestrator walks the repository, determines language by extension, loads the appropriate tree-sitter grammar, and delegates to language-specific parsers. It respects glob patterns from configuration. ERD §3.3.1.
 
@@ -539,7 +556,7 @@ Each story below follows this structure:
 
 **Technical Notes:** Uses `git diff --name-only {last_hash}..HEAD` to identify changed files. For the first run (no last hash), all files are "changed." The detector must not re-parse unchanged files — only pass changed file paths to the parsing orchestrator. Content hash comparison (`CodeReference.content_hash`) is used to detect whether a concept's referenced code has actually changed.
 
-**Definition of Done:** Change detection working with git. Work item generation for all three types (verify, investigate, analyze_impact). Hash tracking for incremental analysis. Tests using a git repository with staged changes.
+**Definition of Done:** Change detection working with git. Work item generation for `verify_concept` and `investigate_file` types (`analyze_impact` generation is deferred to Phase 3). Hash tracking for incremental analysis. Tests using a git repository with staged changes.
 
 **Intra-epic dependencies:** Story 3.5 (graph builder, which the detector invokes for re-parsing).
 
@@ -576,7 +593,7 @@ Each story below follows this structure:
 
 #### Story 4.1: MCP Server Scaffolding
 
-**As a** developer integrating A-Priori with AI coding agents, **I want** a running MCP server with the FastMCP framework, lifespan management, and error handling **so that** the server can start, initialize its resources, register tools, and communicate over stdio.
+**As the** MCP server, **I want** a running process with the FastMCP framework with the FastMCP framework, lifespan management, and error handling **so that** the server can start, initialize its resources, register tools, and communicate over stdio.
 
 **Context:** The MCP server is a thin shell using FastMCP. It initializes a KnowledgeStore via a lifespan context manager and wraps all tools with a `safe_tool` error decorator. Per S-6 findings. ERD §3.4.
 
@@ -714,7 +731,7 @@ Each story below follows this structure:
 
 #### Story 6.1: LLMAdapter Protocol Definition
 
-**As a** developer implementing the librarian or co-regulation review, **I want** a clean adapter protocol that abstracts LLM provider differences **so that** calling code doesn't need to know whether it's talking to Claude, GPT, or a local Ollama model.
+**As the** librarian and co-regulation review, **I want** a clean adapter protocol that abstracts LLM provider differences **so that** calling code doesn't need to know whether it's talking to Claude, GPT, or a local Ollama model.
 
 **Context:** The adapter protocol defines the interface for all LLM interactions. Per S-1, the `analyze` method is `async def` (network I/O). `get_token_count` and `get_model_info` are plain `def`. ERD §4.1.1.
 
@@ -777,7 +794,7 @@ Each story below follows this structure:
 
 #### Story 6.4: Adapter Protocol Test Suite
 
-**As a** developer maintaining adapters, **I want** a shared test suite that runs against any adapter implementation **so that** all adapters are verified against identical behavioral expectations.
+**As an** engineer validating adapter correctness, **I want** a shared test suite that runs against any adapter implementation **so that** all adapters are verified against identical behavioral expectations.
 
 **Context:** Both adapters must pass the same tests. Tests use mock HTTP responses. ERD §4.1.
 
@@ -823,7 +840,7 @@ Each story below follows this structure:
 
 #### Story 7.2: Librarian Output Test Fixtures
 
-**As a** developer testing the quality pipeline, **I want** a curated set of known-good and known-bad librarian outputs **so that** I can test the quality pipeline deterministically without live LLM calls.
+**As the** quality pipeline test suite, **I want** a curated set of known-good and known-bad librarian outputs **so that** I can test the quality pipeline deterministically without live LLM calls.
 
 **Context:** These fixtures are used across the quality pipeline (Level 1 and Level 1.5) and by the librarian orchestrator (Epic 10). They are the foundation for testing the system's quality gate.
 
@@ -1082,7 +1099,7 @@ Each story below follows this structure:
 - Given a work item with previous failure records, when it is selected for retry, then the prompt includes the failure history and co-regulation feedback from previous attempts.
 - Given an empty work queue, when the loop starts, then it logs "No unresolved work items. Nothing to do." and exits cleanly.
 - Given each iteration, when it completes, then no state is carried to the next iteration (context is loaded fresh from disk).
-- Given the start of a `librarian run`, when the orchestrator initializes, then it triggers the historical impact batch computation (Story 12.4) to refresh git co-change profiles before iteration begins.
+- Given the start of a `librarian run`, when the orchestrator initializes, then it invokes a pluggable pre-run hook (no-op in Phase 2; Phase 3 registers the historical impact batch computation via Story 12.4).
 - Given resolved work items older than the configured retention policy, when the librarian loop initializes, then those items and their failure records are deleted from the database.
 
 **Technical Notes:** Per S-1, the loop orchestrator is an async function managing iterations via `asyncio.gather()` for concurrency within a single run. Each iteration is isolated. The adapter's `analyze` call is the async boundary. Everything else (storage reads/writes, quality checks) uses sync methods called from the thread pool. Queue selection optimization: The loop should query SQLite for the top N unresolved work items ordered by `base_priority_score`, then apply the adaptive modulation (Epic 9) in-memory to those N items, and select the one with the highest effective score. This avoids running a full-table `UPDATE` on every iteration.
@@ -1164,11 +1181,11 @@ Each story below follows this structure:
 
 ---
 
-#### Story 11.2: Backend REST API
+#### Story 11.2a: Read-Only Graph API
 
-**As a** frontend developer, **I want** a complete REST API serving graph data, activity feeds, health metrics, and review actions **so that** the frontend can be built against a stable, well-documented API.
+**As a** frontend developer, **I want** read-only REST endpoints serving graph data, activity feeds, health metrics, and escalated items **so that** the frontend can render the graph, activity feed, and health dashboard.
 
-**Context:** FastAPI backend serving the frontend. Read-only except for review actions. ERD §4.7.2.
+**Context:** FastAPI backend serving the frontend. These endpoints are read-only and delegate to the KnowledgeStore. ERD §4.7.2.
 
 **Acceptance Criteria:**
 
@@ -1177,14 +1194,31 @@ Each story below follows this structure:
 - Given `GET /api/graph?center={id}&radius=2`, when called, then a subgraph (concepts and edges within 2 hops of center) is returned in a format suitable for graph visualization.
 - Given `GET /api/activity?limit=20`, when called, then the 20 most recent librarian iterations are returned with work item details, pass/fail status, and co-regulation scores.
 - Given `GET /api/health`, when called, then current metric values, targets, effective priority weights, and work queue depth are returned.
+
+**Technical Notes:** Use FastAPI with `asyncio.to_thread()` for sync KnowledgeStore calls per S-1. The API reads from the same SQLite database as the MCP server and librarian. CORS is not needed (same origin — served from the same process). The backend also serves the static frontend assets. The server must be launchable via the `apriori ui` (or `apriori-ui`) CLI command, which registers as a sub-command in the CLI router (per PRD §8A.2 and ERD §4.7).
+
+**Definition of Done:** All read-only endpoints implemented and tested. API documentation auto-generated by FastAPI. The `apriori ui` CLI command starts the server and opens (or prints) the local URL.
+
+**Intra-epic dependencies:** Story 11.1 (technology decision informs response format for graph data).
+
+---
+
+#### Story 11.2b: Review Action API
+
+**As a** frontend developer, **I want** REST endpoints for review actions (verify, correct, flag) and escalated item retrieval **so that** the human review workflow can operate through the UI.
+
+**Context:** These endpoints mutate state — they record ReviewOutcomes and create work items. ERD §4.7.2.
+
+**Acceptance Criteria:**
+
 - Given `GET /api/escalated`, when called, then escalated work items with full failure history are returned.
 - Given `POST /api/concepts/{id}/verify`, when called, then the concept is verified and a ReviewOutcome is recorded.
 - Given `POST /api/concepts/{id}/correct` with error type and correction details, when called, then the concept is updated and a ReviewOutcome is recorded.
 - Given `POST /api/concepts/{id}/flag`, when called, then the concept is flagged and a `review_concept` work item is created.
 
-**Technical Notes:** Use FastAPI with `asyncio.to_thread()` for sync KnowledgeStore calls per S-1. The API reads from the same SQLite database as the MCP server and librarian. CORS is not needed (same origin — served from the same process). The backend also serves the static frontend assets.
+**Technical Notes:** Review actions delegate to the review outcomes module. Error type validation must match the five valid `error_type` values defined in Story 1.4.
 
-**Definition of Done:** All endpoints implemented and tested. API documentation auto-generated by FastAPI. Review actions correctly delegating to the review outcomes module.
+**Definition of Done:** All review endpoints implemented and tested. Review actions correctly delegating to the review outcomes module.
 
 **Intra-epic dependencies:** Story 11.1 (technology decision informs response format for graph data).
 
@@ -1210,7 +1244,7 @@ Each story below follows this structure:
 
 **Definition of Done:** Graph rendering working at 500 nodes. Click-to-inspect working. All filter types working. Visual confidence distinction implemented.
 
-**Intra-epic dependencies:** Story 11.1 (S-7 technology selection), Story 11.2 (API to serve graph data).
+**Intra-epic dependencies:** Story 11.1 (S-7 technology selection), Story 11.2a (API to serve graph data).
 
 ---
 
@@ -1228,7 +1262,7 @@ Each story below follows this structure:
 
 **Definition of Done:** Activity feed displaying correct data. Failed iterations clearly distinguished from successful ones. Expandable detail view for failures.
 
-**Intra-epic dependencies:** Story 11.2 (API endpoint for activity data).
+**Intra-epic dependencies:** Story 11.2a (API endpoint for activity data).
 
 ---
 
@@ -1248,7 +1282,7 @@ Each story below follows this structure:
 
 **Definition of Done:** Full verify/correct/flag workflow working end-to-end. Review actions correctly updating concepts and recording outcomes.
 
-**Intra-epic dependencies:** Story 11.2 (API review endpoints), Story 11.3 (graph visualization for navigation to concepts).
+**Intra-epic dependencies:** Story 11.2b (API review endpoints), Story 11.3 (graph visualization for navigation to concepts).
 
 ---
 
@@ -1267,7 +1301,7 @@ Each story below follows this structure:
 
 **Definition of Done:** Dashboard displaying all three metrics with targets. Priority weights shown. Work queue depth shown.
 
-**Intra-epic dependencies:** Story 11.2 (API health endpoint).
+**Intra-epic dependencies:** Story 11.2a (API health endpoint).
 
 ---
 
@@ -1285,7 +1319,7 @@ Each story below follows this structure:
 
 **Definition of Done:** Escalated items view listing all escalated work items. Full failure history expandable per item.
 
-**Intra-epic dependencies:** Story 11.2 (API escalated endpoint).
+**Intra-epic dependencies:** Story 11.2b (API escalated endpoint).
 
 ---
 
@@ -1372,9 +1406,9 @@ Each story below follows this structure:
 
 **Technical Notes:** Confidence formula: `co_change_count / total_changes * recency_weight`. Recency decay can be exponential or linear over a configurable window (e.g., last 90 days). Batch processing: analyze the git log once and update all affected profiles.
 
-**Definition of Done:** Git history analysis extracting co-change patterns. Confidence with recency decay working. Batch processing efficient.
+**Definition of Done:** Git history analysis extracting co-change patterns. Confidence with recency decay working. Batch processing efficient. Pre-run hook registered into the Phase 2 librarian orchestrator (Story 10.1) so that historical impact profiles are refreshed automatically at the start of each `librarian run`.
 
-**Intra-epic dependencies:** Story 12.2 (shares ImpactProfile storage).
+**Intra-epic dependencies:** Story 12.2 (shares ImpactProfile storage). Story 10.1 (provides the pre-run hook extension point).
 
 ---
 
@@ -1521,7 +1555,7 @@ Now that all stories are defined, the following cross-epic dependencies emerge:
 1. **Story 1.1 → Story 2.2:** The KnowledgeStore protocol references Concept/Edge types.
 2. **Story 1.5 → Story 1.2:** Edge type vocabulary is loaded from config.
 3. **Story 2.2 → Stories 2.3, 2.6:** Protocol must be defined before implementations begin.
-4. **Stories 2.3 + 2.4 → Story 2.5:** Vector search requires both the SQLite base and the embedding service.
+4. **Stories 2.3a/2.3b + 2.4 → Story 2.5:** Vector search requires both the SQLite base and the embedding service.
 5. **Stories 2.5 + 2.6 → Story 2.7:** Dual writer composes both implementations.
 6. **Story 2.7 → Stories 3.5, 4.1:** Graph builder and MCP server both need a working store.
 7. **Story 6.1 → Stories 6.2, 6.3:** Adapters implement the protocol.
@@ -1545,7 +1579,7 @@ Now that all stories are defined, the following cross-epic dependencies emerge:
 These stories are on the critical path and block the most downstream work:
 
 1. **Story 2.2 (KnowledgeStore Protocol)** — blocks all storage implementation and everything downstream.
-2. **Story 2.3 (SQLite Implementation)** — blocks dual writer, which blocks everything that writes data.
+2. **Stories 2.3a/2.3b (SQLite Implementation)** — blocks dual writer, which blocks everything that writes data.
 3. **Story 6.1 (LLMAdapter Protocol)** — blocks all of Phase 2's LLM-dependent work.
 4. **Story 10.1 (Loop Execution)** — the integration point where all Phase 2 components come together.
 
