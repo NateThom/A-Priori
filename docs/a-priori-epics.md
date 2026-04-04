@@ -124,7 +124,7 @@ The seven write tools (`create_concept`, `update_concept`, `delete_concept`, `cr
 
 The `apriori init` command is the most important story in this epic — it's the "time to first value" path. It creates `.apriori/`, writes a default `apriori.config.yaml`, triggers the structural parser, builds the graph, and reports results. On first run, the `EmbeddingService` will download the e5-base-v2 model (~440MB), which adds a one-time delay. The CLI should surface this clearly ("Downloading embedding model (440MB, one-time)...") rather than leaving the user staring at an unexplained pause.
 
-The remaining commands (`status`, `search`, `rebuild-index`, `config`) are straightforward wrappers. `status` displays coverage metrics, work queue depth, and last parse timestamp. `search` wraps the same logic as the MCP `search` tool. `rebuild-index` reconstructs SQLite from YAML. `config` prints or modifies values.
+The remaining commands (`status`, `search`, `rebuild-index`, `config`) are straightforward wrappers. `status` displays coverage metrics, work queue depth, and last parse timestamp. `search` wraps the same logic as the MCP `search` tool. `rebuild-index` wraps the `KnowledgeStore.rebuild_index` method to reconstruct the SQLite database from YAML authoritative files. `config` prints or modifies values.
 
 **Acceptance Criteria:** `apriori init` works in any git repository with zero configuration beyond running the command. The structural graph is queryable via `apriori search` within 60 seconds of running `init` (excluding first-time model download). `apriori status` reports accurate metrics. `apriori rebuild-index` successfully reconstructs the database.
 

@@ -649,7 +649,7 @@ Each story below follows this structure:
 - Given an existing concept, when `update_concept` is called with a new description, then the concept is updated and the updated concept is returned.
 - Given a concept with edges, when `delete_concept` is called, then the concept and its edges are removed.
 - Given two existing concepts and a valid edge type, when `create_edge` is called, then the edge is created.
-- Given an existing edge, when `update_edge` is called with a new confidence, then the edge is updated.
+- Given an existing edge, when `update_edge` is called with a new type, confidence, or metadata, then the edge is updated in the KnowledgeStore.
 - Given an existing edge, when `delete_edge` is called, then the edge is removed.
 - Given an invalid edge type, when `create_edge` is called, then an `isError=True` response is returned listing valid types.
 - Given a knowledge gap description, when `report_gap` is called, then a `reported_gap` work item is created in the work queue with the provided description and optional context.
@@ -1385,6 +1385,7 @@ Each story below follows this structure:
 - Given two concepts connected by a `shares-assumption-about` edge with confidence 0.8, when semantic impact is computed, then the target appears with `confidence = 0.8` and `depth = 1`.
 - Given a chain of semantic edges A→B (0.8) → C (0.7), when traversal reaches C, then confidence is `0.8 * 0.7 = 0.56`.
 - Given a concept with no semantic edges, when impact is computed, then the semantic impact list is empty and the profile is flagged as "structural only."
+- Given a semantic graph traversal, when computing impact, then edges of type `relates-to` and `owned-by` are ignored.
 
 **Definition of Done:** Semantic BFS traversal working. Confidence product computed correctly. "Structural only" flag applied when no semantic data exists.
 
