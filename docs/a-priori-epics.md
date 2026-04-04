@@ -306,7 +306,7 @@ Semantic impact computation walks the semantic edge graph. Confidence is the pro
 
 Historical impact computation analyzes git log for co-change patterns. This should be batched (analyze once, update all affected profiles) rather than per-concept. Confidence is proportional to co-change frequency with recency decay.
 
-Impact profile maintenance keeps profiles current as the graph evolves: structural changes trigger immediate recomputation, semantic changes update as a librarian side effect, historical data refreshes periodically. Stale profiles generate `analyze_impact` work items.
+Impact profile maintenance keeps profiles current as the graph evolves: structural changes trigger immediate recomputation, semantic changes update as a librarian side effect, historical data refreshes automatically at the start of each librarian run. Stale profiles generate `analyze_impact` work items.
 
 The `blast_radius` MCP tool is the query interface. It accepts a concept name/ID, file path, or function symbol, resolves to concept(s), and returns the pre-computed impact profile as a prioritized list sorted by composite score. The tool registers in the MCP server (updating the Phase 1 placeholder). The `blast-radius` CLI command wraps the same logic.
 

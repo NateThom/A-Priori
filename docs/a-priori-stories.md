@@ -114,6 +114,7 @@ Each story below follows this structure:
 - Given the default `apriori.config.yaml`, when the edge type vocabulary is loaded, then it contains exactly the 12 edge types defined in PRD §5.4 (4 structural, 7 semantic, 1 historical).
 - Given a user-extended config adding a custom edge type, when the vocabulary is loaded, then the custom type is included alongside the defaults.
 - Given a confidence of 0.5 and evidence_type of "structural", when an Edge is serialized to JSON and back, then the round-trip is lossless.
+- Given an Edge with a metadata dictionary containing arbitrary key-value pairs, when serialized and deserialized, then the metadata is preserved without loss.
 
 **Technical Notes:** The `UNIQUE(source, target, edge_type)` constraint is enforced at the storage layer, not the model layer. The model only validates field types and ranges. The vocabulary is defined in config and loaded by the configuration system (Story 1.5), so this story depends on Story 1.5 being at least partially complete or uses a hardcoded fallback for testing.
 
@@ -179,7 +180,7 @@ Each story below follows this structure:
 - Given a config file with only `llm.provider: anthropic` and `llm.api_key_env: ANTHROPIC_API_KEY`, when loaded, then all other settings use defaults and the config is valid.
 - Given a config file with `librarian.modulation_strength: 0.0`, when loaded, then adaptive modulation is effectively disabled (the value is accepted as valid).
 - Given a config file with `quality.co_regulation.enabled: false`, when loaded, then co-regulation is disabled.
-- Given a config file with an invalid value like `librarian.base_weights.staleness: 2.0` (weights should sum to 1.0 or be normalizable), when loaded, then the system either normalizes or raises a clear validation error.
+- Given a config file with base priority weights that do not sum to 1.0 (e.g., `staleness: 0.5, needs_review: 0.5, coverage_gap: 0.3, ...`), when loaded, then the system normalizes them proportionally so they sum to 1.0 and logs a warning — it does not reject the configuration.
 - Given a config file with `edge_types` containing a custom type, when loaded, then the custom type is appended to the default vocabulary (not replacing it).
 - Given a default configuration load, then the resulting config object contains `work_queue.retention_days` with a default value of 30.
 
@@ -531,6 +532,7 @@ Each story below follows this structure:
 - Given the graph builder has already run on the same codebase, when run again with no changes, then no duplicate concepts or edges are created (upsert by fully-qualified symbol name).
 - Given a function that was renamed, when the builder runs on the updated code, then the old concept is updated (not duplicated) and its `updated_at` is refreshed.
 - Given parse results, when the builder runs, then every concept has at least one CodeReference with a valid `content_hash` (SHA-256 of the referenced code block).
+- Given parse results, when the builder runs, then every CodeReference has its `semantic_anchor` populated with a structural hint: the function/method signature for callables, or the first line of the code block for non-callable constructs (e.g., classes, modules). This provides a baseline anchor for the repair chain until the Librarian enriches it in Phase 2.
 - Given parse results containing a function with parameters and return types, when the graph builder runs, then the created concept node stores those parameters and return types inside its `metadata` dictionary.
 - Given parse results, when the graph builder runs, then every created/updated concept and edge is stamped with the current git HEAD hash in the `derived_from_code_version` field.
 
@@ -575,10 +577,10 @@ Each story below follows this structure:
 
 - Given a code reference with a valid symbol, when resolved, then symbol lookup succeeds and the content hash is verified against current code.
 - Given a code reference whose symbol was renamed but content is unchanged, when symbol lookup fails, then the content hash is used to locate the code by scanning the referenced file, and the symbol is updated.
-- Given a code reference whose symbol was renamed and content changed, when both symbol and hash fail, then the semantic anchor is used as a fallback description for re-finding the code (requires LLM; expensive path).
-- Given all three resolution methods fail, when resolution is attempted, then the code reference is marked unresolved and the parent concept is labeled `needs-review`.
+- Given a code reference whose symbol was renamed and content changed, when both symbol and hash fail, then the semantic anchor fallback path is invoked. In Phase 1 (before the LLM Adapter layer is integrated in Phase 2), this path returns an `unresolved` status rather than performing an LLM call; the code reference is marked unresolved as if all three methods failed.
+- Given all three resolution methods fail (or the semantic anchor path is dormant in Phase 1), when resolution is attempted, then the code reference is marked unresolved and the parent concept is labeled `needs-review`.
 
-**Technical Notes:** Symbol lookup should succeed ~80% of the time (PRD §5.2). Content hash comparison is a SHA-256 check — fast and deterministic. Semantic anchor resolution is the expensive fallback and should only be invoked when both prior steps fail. The resolution function should return a result indicating which method succeeded (or that all failed) for telemetry.
+**Technical Notes:** Symbol lookup should succeed ~80% of the time (PRD §5.2). Content hash comparison is a SHA-256 check — fast and deterministic. Semantic anchor resolution is the expensive fallback and should only be invoked when both prior steps fail. **Phase 1 note:** The semantic anchor resolution step is implemented but dormant — it returns `unresolved` immediately because the LLM Adapter (Phase 2) is not yet available. This preserves the zero-LLM-dependency guarantee for Phase 1 while ensuring the full repair chain code path is tested. The resolution function should return a result indicating which method succeeded (or that all failed) for telemetry.
 
 **Definition of Done:** Three-step fallback implemented. Each step tested independently. Graceful degradation on total failure. Parent concept correctly labeled on unresolved reference.
 
@@ -629,7 +631,7 @@ Each story below follows this structure:
 - Given a file path, when `search` is called with mode "file", then all concepts referencing that file are returned.
 - Given a starting concept and max hops of 2, when `traverse` is called, then all concepts within 2 edges of the start are returned with the connecting edges.
 - Given a concept name, when `get_concept` is called, then the full concept with metadata, code references, edges, and impact profile is returned.
-- Given the current graph state, when `get_status` is called, then accurate metrics are returned (total concepts, edges, coverage percentage, work queue depth).
+- Given the current graph state, when `get_status` is called, then accurate metrics are returned (total concepts, edges, coverage percentage, staleness metrics, work queue depth, and a summary of recent librarian activity).
 - Given Phase 1, when `blast_radius` is called, then a message "Blast radius analysis is not yet available. It will be enabled in a future update." is returned.
 
 **Technical Notes:** Each tool handler should be 3–10 lines of glue code per S-6's findings. The `search` semantic mode requires the EmbeddingService to embed the query text before calling `search_semantic`. Filter parameters (labels, confidence threshold, date range) should be optional on `search`.

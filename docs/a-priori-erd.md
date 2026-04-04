@@ -184,7 +184,7 @@ Implements the schema from PRD §5.1.
 
 #### 3.1.2 Code Reference (`models/concept.py`, embedded)
 
-Implements the repair chain from PRD §5.2. Embedded in the Concept model, not a standalone entity. The repair chain resolution order (symbol → content_hash → semantic_anchor) is not enforced in the model but in the retrieval layer that resolves references. `content_hash` should use SHA-256 of the referenced code block, stored as a hex string. `semantic_anchor` is a natural language description written by the librarian; resolution via semantic anchor requires an LLM call and is the expensive fallback. `line_range` is advisory, not authoritative.
+Implements the repair chain from PRD §5.2. Embedded in the Concept model, not a standalone entity. The repair chain resolution order (symbol → content_hash → semantic_anchor) is not enforced in the model but in the retrieval layer that resolves references. `content_hash` should use SHA-256 of the referenced code block, stored as a hex string. `semantic_anchor` is a natural language description that is initially populated by the Structural Engine as a "structural hint" (e.g., the function signature or first line of the code block) and later enriched by the librarian with a full natural language description during its first semantic analysis pass; resolution via semantic anchor requires an LLM call and is the expensive fallback. `line_range` is advisory, not authoritative.
 
 #### 3.1.3 Edge (`models/edge.py`)
 
@@ -231,6 +231,14 @@ New model. Captures a human reviewer's assessment from the Level 2 review workfl
 `concept_id` is the concept being reviewed. `reviewer` is a string identifier (could be a name or "anonymous"). `action` is an enum: `verified`, `corrected`, `flagged`. `error_type` is an optional enum populated when `action == corrected`: `description_wrong`, `relationship_missing`, `relationship_hallucinated`, `confidence_miscalibrated`, `other`. `correction_details` is an optional string describing the correction. `created_at` is a timestamp.
 
 Review outcomes are stored in their own SQLite table (not on the concept) because they are telemetry data used for error profiling, not knowledge graph content.
+
+#### 3.1.8 LLM Support Models (`models/llm.py`)
+
+Support types returned by the LLM Adapter layer (§4.1.1). These are not knowledge graph entities but are used throughout the quality pipeline and telemetry subsystem.
+
+`AnalysisResult` captures the output of a single LLM call. `content` is a string — the parsed response body. `model_name` is a string identifying which model produced the result (written into failure records so retry attempts can be distinguished from the original). `tokens_used` is an integer — the total token count for the request+response, used for budget tracking.
+
+`ModelInfo` captures metadata about an available LLM backend. `name` is a string — the model identifier (e.g., `"claude-sonnet-4-20250514"`). `context_window` is an integer — maximum token capacity. `cost_per_token` is a float — used by the adaptive priority modulation and telemetry dashboards for cost reporting.
 
 ### 3.2 Storage Layer
 
@@ -326,6 +334,25 @@ CREATE TABLE review_outcomes (
 
 CREATE INDEX idx_review_outcomes_concept ON review_outcomes(concept_id);
 CREATE INDEX idx_review_outcomes_action ON review_outcomes(action);
+
+-- Iteration-level telemetry for the librarian activity feed (§4.7.2)
+CREATE TABLE librarian_activity (
+    id TEXT PRIMARY KEY,
+    work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL,
+    status TEXT NOT NULL CHECK (status IN ('pass', 'fail', 'escalated')),
+    model TEXT NOT NULL,
+    tokens_used INTEGER NOT NULL DEFAULT 0,
+    co_regulation_scores TEXT,             -- JSON: {"specificity": 0.7, ...} or NULL if co-regulation disabled
+    concepts_created INTEGER NOT NULL DEFAULT 0,
+    concepts_updated INTEGER NOT NULL DEFAULT 0,
+    edges_created INTEGER NOT NULL DEFAULT 0,
+    edges_updated INTEGER NOT NULL DEFAULT 0,
+    feedback TEXT,                          -- reviewer_feedback summary on failure
+    created_at TEXT NOT NULL               -- ISO 8601
+);
+
+CREATE INDEX idx_librarian_activity_created ON librarian_activity(created_at DESC);
+CREATE INDEX idx_librarian_activity_status ON librarian_activity(status);
 ```
 
 Key implementation decisions: All timestamps are ISO 8601 text strings. Foreign key enforcement is explicitly enabled per connection (`PRAGMA foreign_keys = ON`). WAL mode is enabled for concurrent read access while the librarian writes (`PRAGMA journal_mode = WAL`). The `UNIQUE` constraint on edges prevents duplicate relationships. The `failure_records` column is a JSON array that can grow — at escalation threshold (default 3 records), the array contains roughly 1–3KB of JSON, which is well within SQLite's practical limits. After escalation, failure records are retained for diagnostic purposes. Failure records are cleaned up alongside their parent work item when the work item retention policy runs (see §3.1.4).
@@ -371,6 +398,8 @@ Performance requirement (PRD §4.1): sub-second per file.
 #### 3.3.2 Graph Builder (`structural/graph_builder.py`)
 
 Transforms parse results into concept nodes and structural edges. Each function/method, class, and module becomes a concept node. Structural edges are created for `calls`, `imports`, `inherits`, and `type-references` relationships, all with `evidence_type = "structural"` and `confidence = 1.0`.
+
+For each CodeReference created, the graph builder populates the `semantic_anchor` field with a "structural hint" — the function/method signature, or the first line of the code block for non-callable constructs. This provides a baseline anchor for the repair chain in Phase 1; the Librarian enriches these with full natural language descriptions during Phase 2.
 
 The graph builder must be idempotent: running it twice on the same codebase produces the same graph state, upserting by fully-qualified symbol name.
 
