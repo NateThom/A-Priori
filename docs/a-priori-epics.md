@@ -356,8 +356,9 @@ Phase 1:
 
 Phase 2:
   Epic 6 (LLM Adapters)
-    ├─► Epic 7 (Quality Pipeline)  ←── S-8 spike
-    │     └──────────────────────────────┐
+    └─► Epic 7 (Quality Pipeline)  ←── S-8 spike
+          └──────────────────────────────┐
+  Epic 2 (Storage Layer)                 │
     ├─► Epic 8 (Knowledge Manager)       │
     │     └──────────────────────────────┤
     └─► Epic 9 (Priority & Metrics)      │

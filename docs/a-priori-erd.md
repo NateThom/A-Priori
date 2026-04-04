@@ -745,7 +745,7 @@ Phase 4 is complete when: (1) Progressive enrichment correctly prioritizes devel
 
 **Question:** What is the actual quality of tree-sitter grammars for Python and TypeScript? Known gaps in function detection, class parsing, import resolution, or JSX/TSX?
 
-**Timebox:** 2 hours. Parse diverse real-world files, manually verify, document gaps.
+**Timebox:** 3–4 hours. Parse diverse real-world files, manually verify, document gaps.
 
 ### S-4: Blast Radius Accuracy Validation Methodology
 
@@ -757,7 +757,7 @@ Phase 4 is complete when: (1) Progressive enrichment correctly prioritizes devel
 
 **Question:** Performance of one-file-per-concept at 10,000 concepts? Directory listing and `rebuild_index` performance? Need for nested directory structure?
 
-**Timebox:** 2 hours. Generate synthetic files, measure, decide.
+**Timebox:** 2–3 hours. Generate synthetic files, measure, decide.
 
 ### S-6: MCP Python SDK Capabilities and Constraints — **DECIDED**
 
