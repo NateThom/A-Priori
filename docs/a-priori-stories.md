@@ -76,7 +76,7 @@ Each story below follows this structure:
 
 ---
 
-#### Story 1.1: Concept and CodeReference Pydantic Models
+#### Story 1.1: Concept, CodeReference, and Impact Models
 
 **As a** developer implementing the storage layer, **I want** validated Pydantic models for Concept and CodeReference **so that** every module in the system works against a single, well-validated schema definition with clear serialization contracts.
 
@@ -91,6 +91,7 @@ Each story below follows this structure:
 - Given a Concept with two CodeReferences, when the Concept is serialized to JSON and deserialized back, then the round-tripped object is identical to the original (all fields, including nested CodeReferences, match exactly).
 - Given a Concept with two CodeReferences, when the Concept is serialized to YAML and deserialized back, then the round-tripped object is identical to the original.
 - Given a CodeReference with `content_hash` as a 64-character hex string, when instantiated, then validation passes. Given a non-hex string, then validation fails.
+- Given valid ImpactProfile and ImpactEntry data, when instantiated and serialized to JSON/YAML, then they round-trip without loss.
 
 **Technical Notes:** `content_hash` uses SHA-256 (64-character hex). `labels` is `set[str]`, not validated against a vocabulary at the model level (labels are extensible). The initial label set (`needs-review`, `auto-generated`, `deprecated`, `verified`, `stale`, `needs-human-review`) should be documented as constants but not enforced by the model. `derived_from_code_version` is a nullable 40-character hex string (git commit hash).
 
@@ -1078,6 +1079,8 @@ Each story below follows this structure:
 - Given a work item with previous failure records, when it is selected for retry, then the prompt includes the failure history and co-regulation feedback from previous attempts.
 - Given an empty work queue, when the loop starts, then it logs "No unresolved work items. Nothing to do." and exits cleanly.
 - Given each iteration, when it completes, then no state is carried to the next iteration (context is loaded fresh from disk).
+- Given the start of a `librarian run`, when the orchestrator initializes, then it triggers the historical impact batch computation (Story 12.4) to refresh git co-change profiles before iteration begins.
+- Given resolved work items older than the configured retention policy, when the librarian loop initializes, then those items and their failure records are deleted from the database.
 
 **Technical Notes:** Per S-1, the loop orchestrator is an async function managing iterations via `asyncio.gather()` for concurrency within a single run. Each iteration is isolated. The adapter's `analyze` call is the async boundary. Everything else (storage reads/writes, quality checks) uses sync methods called from the thread pool.
 

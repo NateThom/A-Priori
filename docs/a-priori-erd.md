@@ -218,7 +218,7 @@ The key design constraint: failure records must contain enough information that 
 
 New model. Captures the structured output of the Level 1.5 co-regulation review.
 
-`specificity_score` is a float in `[0.0, 1.0]`. `structural_corroboration_score` is a float in `[0.0, 1.0]`. `completeness_score` is a float in `[0.0, 1.0]`. `composite_pass` is a boolean — `True` if the assessment passes the configured thresholds on all three dimensions. `feedback` is a string — on failure, this contains specific, actionable guidance for the librarian's next attempt; on pass, this may be empty or contain minor notes. `raw_response` is the full text of the co-regulation LLM's response, retained for debugging.
+`specificity_score` is a float in `[0.0, 1.0]`. `structural_corroboration_score` is a float in `[0.0, 1.0]`. `completeness_score` is a float in `[0.0, 1.0]`. `composite_pass` is a boolean — `True` if the assessment passes the configured thresholds on all three dimensions. `feedback` is a string — on failure, this contains specific, actionable guidance for the librarian's next attempt; on pass, this may be empty or contain minor notes.
 
 The composite pass/fail threshold for each dimension should be configurable, with defaults of 0.5 for specificity, 0.3 for structural corroboration (intentionally lower — semantic-only relationships are legitimate), and 0.4 for completeness.
 
@@ -383,9 +383,9 @@ Uses `git diff --name-only {last_hash}..HEAD` or equivalent. Must not re-parse u
 
 Thin wrapper that registers tools and delegates to the core library. Uses the MCP Python SDK. Each tool function should be 10–20 lines of glue code: parse input, call core library, format and return result. All validation and business logic lives in the core library.
 
-**Phase 1 read tools:** `search` (full implementation with `keyword`, `exact`, `file`, and `semantic` modes; `semantic` mode uses local embeddings via e5-base-v2 per S-2 decision), `traverse` (full), `get_concept` (full), `list_edge_types` (full), `get_status` (full).
+**Phase 1 read tools:** `search` (full implementation with `keyword`, `exact`, `file`, and `semantic` modes; `semantic` mode uses local embeddings via e5-base-v2 per S-2 decision), `traverse` (full), `get_concept` (full), `list_edge_types` (full), `get_status` (full), `blast_radius` (registered as a placeholder returning a "not yet available" message).
 
-**Deferred to Phase 3:** `blast_radius`.
+**Full implementation deferred to Phase 3:** `blast_radius`.
 
 **Phase 1 write tools:** `create_concept`, `update_concept`, `delete_concept`, `create_edge`, `update_edge`, `delete_edge`, `report_gap` (all full implementation with edge type validation).
 
@@ -473,7 +473,7 @@ This module now has two responsibilities: computing base priority scores and mod
 
 #### 4.3.1 Base Priority Computation
 
-For each unresolved work item, compute each factor: `staleness` (ratio of knowledge age to code age, clamped to `[0, 1]`), `needs_review` (binary `1.0` if the concept has the label, else `0.0`), `coverage_gap` (binary for `investigate_file` items), `git_activity` (normalized commit count in configured window), `semantic_delta` (binary for `evaluate_relationship` items), `developer_proximity` (graph distance from recent developer activity, inverted and normalized).
+For each unresolved work item, compute each factor: `staleness` (binary `1.0` if the concept has the `stale` label, else `0.0`), `needs_review` (binary `1.0` if the concept has the label, else `0.0`), `coverage_gap` (binary for `investigate_file` items), `git_activity` (normalized commit count in configured window), `semantic_delta` (binary for `evaluate_relationship` items), `developer_proximity` (graph distance from recent developer activity, inverted and normalized).
 
 #### 4.3.2 Adaptive Modulation (PRD §6.3.1)
 
@@ -674,7 +674,7 @@ Phase 3 delivers the impact profile data model, three-layer impact computation, 
 
 ### 5.2 Impact Profile Maintenance
 
-Pre-computed and stored on each concept node. Updated: structurally (immediately when change detector runs and structural edges change), semantically (as a side effect of librarian iterations that discover new relationships), historically (periodically, configurable interval). Stale profiles generate `analyze_impact` work items.
+Pre-computed and stored on each concept node. Updated: structurally (immediately when change detector runs and structural edges change), semantically (as a side effect of librarian iterations that discover new relationships), historically (periodically, **triggered by the change detector during init or librarian runs**). Stale profiles generate `analyze_impact` work items.
 
 ### 5.3 Blast Radius MCP Tool
 
@@ -704,7 +704,7 @@ Clear progress telemetry: "Analyzed 47/312 source files. Estimated remaining cos
 
 ### 6.2 Comprehensive CLI
 
-Expand from Phase 1: `apriori librarian run [--iterations N] [--budget TOKENS]`, `apriori librarian status`, `apriori blast-radius <target>`, `apriori concept <name>`, `apriori validate` (integrity checks), `apriori export [--format json|yaml]`, `apriori doctor` (diagnostic: tree-sitter, LLM connectivity, SQLite health, git integration), `apriori ui` (start audit UI server).
+Expand from Phase 1: `apriori librarian run [--iterations N] [--budget TOKENS]`, `apriori librarian status`, `apriori blast-radius <target>`, `apriori concept <name>`, `apriori validate` (integrity checks), `apriori export [--format json|yaml]`, `apriori doctor` (diagnostic: tree-sitter, LLM connectivity, SQLite health, git integration).
 
 ### 6.3 Documentation
 
