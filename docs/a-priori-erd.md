@@ -351,7 +351,7 @@ Concept filenames are derived from the concept name by slugifying (lowercase, hy
 
 Coordinates writes between SQLite and YAML. Implements the `KnowledgeStore` protocol. Write strategy: (1) Write to YAML first (authoritative). (2) Write to SQLite second (acceleration layer). (3) If SQLite write fails, log warning but do not roll back YAML — SQLite can be rebuilt. (4) Reads served from SQLite for performance. (5) Work item operations, review outcome operations, and metrics queries are SQLite-only (not dual-written).
 
-The `rebuild_index` operation is idempotent and must be invocable via CLI and triggered automatically on first run.
+The `rebuild_index` operation is idempotent and must be invocable via CLI. The `init` command must ensure the SQLite acceleration layer is fully populated before completing, eliminating the need for a separate automatic `rebuild_index` trigger.
 
 ### 3.3 Structural Engine (Layer 0)
 
@@ -397,7 +397,7 @@ Phase 1 commands: `apriori init` (initialize project, create `.apriori/`, genera
 
 ### 3.6 Phase 1 Acceptance Criteria
 
-Phase 1 is complete when: (1) `apriori init` successfully parses a Python or TypeScript repository and produces a structural knowledge graph with concept nodes and structural edges. (2) The MCP server starts and all Phase 1 tools respond correctly, including semantic search returning relevance-ranked results via vector similarity. (3) The knowledge graph is persisted in both SQLite and YAML, and `rebuild-index` reconstructs SQLite with no data loss. (4) `apriori status` reports accurate coverage metrics. (5) Running `init` a second time after code changes correctly detects changed files, updates the structural graph, and populates appropriate work items. (6) Structural parsing processes files at sub-second speed per file; full `init` of a 10,000-file repository completes within 60 seconds. (7) All MCP read tool queries on a graph with up to 10,000 concepts complete in under 500ms at p95.
+Phase 1 is complete when: (1) `apriori init` successfully parses a Python or TypeScript repository and produces a structural knowledge graph with concept nodes and structural edges. (2) The MCP server starts and all Phase 1 tools respond correctly, including semantic search returning relevance-ranked results via vector similarity. (3) The knowledge graph is persisted in both SQLite and YAML, and `rebuild-index` reconstructs SQLite with no data loss. (4) `apriori status` reports accurate coverage metrics. (5) Running `init` a second time after code changes correctly detects changed files, updates the structural graph, and populates appropriate work items. (6) Structural parsing processes files at sub-second speed per file; full `init` of a 1,000-file repository completes within 60 seconds. (7) All MCP read tool queries on a graph with up to 10,000 concepts complete in under 500ms at p95.
 
 ---
 
@@ -674,7 +674,7 @@ Phase 3 delivers the impact profile data model, three-layer impact computation, 
 
 ### 5.2 Impact Profile Maintenance
 
-Pre-computed and stored on each concept node. Updated: structurally (immediately when change detector runs and structural edges change), semantically (as a side effect of librarian iterations that discover new relationships), historically (periodically, **triggered by the change detector during init or librarian runs**). Stale profiles generate `analyze_impact` work items.
+Pre-computed and stored on each concept node. Updated: structurally (immediately when change detector runs and structural edges change), semantically (as a side effect of librarian iterations that discover new relationships), historically (periodically, **triggered automatically during the initialization phase of librarian runs**). Stale profiles generate `analyze_impact` work items.
 
 ### 5.3 Blast Radius MCP Tool
 

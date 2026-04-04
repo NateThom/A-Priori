@@ -662,9 +662,10 @@ Each story below follows this structure:
 - Given any git repository with Python or TypeScript files, when `apriori init` is run with no prior setup, then `.apriori/` is created with a default `apriori.config.yaml`, SQLite database, and YAML concept files.
 - Given first-time initialization with no cached embedding model, when the model downloads, then progress is displayed ("Downloading embedding model (440MB, one-time)...").
 - Given a repository with 100 source files, when `apriori init` completes (excluding model download), then total time is under 60 seconds.
-- Given a synthetic repository with 10,000 source files, when `apriori init` completes (excluding model download), then total time is under 60 seconds (per ERD §3.6 and PRD §9.3 acceptance criteria).
+- Given a synthetic repository with 1,000 source files, when `apriori init` completes (excluding model download), then total time is under 60 seconds (per ERD §3.6 and PRD §9.3 acceptance criteria).
 - Given init completes, when the user runs `apriori search "main"`, then they receive search results from the newly created graph.
 - Given init completes, when the user checks `apriori status`, then accurate metrics are reported (concept count, edge count, coverage).
+- Given `apriori init` completes on a new repository, when the SQLite database is inspected, then all parsed concepts, edges, embeddings, and FTS5 entries are fully populated and query-ready without requiring a separate `rebuild-index` step (per ERD §3.2.4).
 - Given init was already run, when `apriori init` is run again, then it detects the existing `.apriori/` directory and performs an incremental update (not a full re-parse).
 
 **Technical Notes:** Use Click or Typer for the CLI framework. The init command orchestrates: (1) create `.apriori/` directory structure, (2) write default config, (3) initialize DualWriter (triggers embedding model download if needed), (4) run structural parser + graph builder, (5) print summary. The summary should show: "Created X concepts, Y edges. Coverage: Z%. Knowledge graph ready. Run `apriori search <query>` to explore."

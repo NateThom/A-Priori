@@ -388,7 +388,7 @@ The most powerful review mechanism requires the least human effort but is deferr
 
 ### 6.5 Token Budget Management
 
-The product shall help users understand and control their LLM spending. This includes a configurable maximum token budget per iteration (preventing any single analysis from consuming excessive resources), a configurable maximum iterations per loop run (controlling total spend for a background session), and telemetry tracking tokens consumed, knowledge nodes created/updated, and work items resolved per run. Additionally, progressive enrichment should be supported on initial setup — when bootstrapping a new codebase, the librarian should start with the developer's actively-edited files and expand outward based on configured budget limits rather than attempting to analyze the entire codebase at once. Progressive enrichment is described here because it is conceptually part of the cost control system, but it is scheduled for Phase 4 implementation (see §12).
+The product shall help users understand and control their LLM spending. This includes a configurable maximum token budget per iteration (preventing any single analysis from consuming excessive resources, with an exception to allow co-regulation review calls to complete even if they push the iteration slightly over budget, to ensure quality is never skipped for cost), a configurable maximum iterations per loop run (controlling total spend for a background session), and telemetry tracking tokens consumed, knowledge nodes created/updated, and work items resolved per run. Additionally, progressive enrichment should be supported on initial setup — when bootstrapping a new codebase, the librarian should start with the developer's actively-edited files and expand outward based on configured budget limits rather than attempting to analyze the entire codebase at once. Progressive enrichment is described here because it is conceptually part of the cost control system, but it is scheduled for Phase 4 implementation (see §12).
 
 ---
 
@@ -570,7 +570,7 @@ Deliver the librarian agent system (Layer 1), the model-agnostic adapter layer, 
 
 ### Phase 3: Blast Radius
 
-Deliver the impact profile data model, the three-layer impact computation (structural + semantic + historical), the `blast_radius` MCP tool, and impact profile maintenance. At the end of this phase, agents can query "what breaks if I change this?" and receive pre-computed, confidence-scored impact assessments.
+Deliver the three-layer impact computation (structural + semantic + historical), the `blast_radius` MCP tool, and impact profile maintenance. At the end of this phase, agents can query "what breaks if I change this?" and receive pre-computed, confidence-scored impact assessments.
 
 ### Phase 4: Polish & Scale
 
