@@ -93,7 +93,7 @@ Each story below follows this structure:
 - Given a CodeReference with `content_hash` as a 64-character hex string, when instantiated, then validation passes. Given a non-hex string, then validation fails.
 - Given valid ImpactProfile and ImpactEntry data, when instantiated and serialized to JSON/YAML, then they round-trip without loss.
 
-**Technical Notes:** `content_hash` uses SHA-256 (64-character hex). `labels` is `set[str]`, not validated against a vocabulary at the model level (labels are extensible). The initial label set (`needs-review`, `auto-generated`, `deprecated`, `verified`, `stale`, `needs-human-review`) should be documented as constants but not enforced by the model. `derived_from_code_version` is a nullable 40-character hex string (git commit hash).
+**Technical Notes:** `content_hash` uses SHA-256 (64-character hex). `labels` is `set[str]`, not validated against a vocabulary at the model level (labels are extensible). The initial label set (`needs-review`, `auto-generated`, `deprecated`, `verified`, `stale`, `needs-human-review`) should be documented as constants but not enforced by the model. `derived_from_code_version` is a nullable 40-character hex string (git commit hash). The Concept model must include an `optional dict` field named `metadata` to store arbitrary structured data (specifically intended for structural AST extraction details like function parameters and return types).
 
 **Definition of Done:** Models implemented with full Pydantic validation. JSON and YAML round-trip tests pass. Invalid input tests cover all constrained fields. Code reviewed and merged.
 
@@ -137,7 +137,7 @@ Each story below follows this structure:
 - Given a FailureRecord with `quality_scores = {"specificity": 0.2, "structural_corroboration": 0.8, "completeness": 0.4}`, when serialized to JSON, then all scores round-trip without loss.
 - Given a WorkItem with `failure_count = 3` and `escalated = False`, when serialized and deserialized, then both fields are preserved correctly (escalation logic is not in the model — it's in the quality pipeline).
 
-**Technical Notes:** The six valid `item_type` values are: `investigate_file`, `verify_concept`, `evaluate_relationship`, `reported_gap`, `review_concept`, `analyze_impact`. `priority_score` is a computed float — it's stored on the model but recalculated fresh by the priority engine before each librarian iteration. `failure_records` is a `list[FailureRecord]` stored as a JSON array in SQLite.
+**Technical Notes:** The six valid `item_type` values are: `investigate_file`, `verify_concept`, `evaluate_relationship`, `reported_gap`, `review_concept`, `analyze_impact`. `base_priority_score` is a computed float — it's stored on the model but recalculated fresh by the priority engine before each librarian iteration. The field is named `base_priority_score` (not `priority_score`) to accurately reflect that the database stores the pre-modulated score. `failure_records` is a `list[FailureRecord]` stored as a JSON array in SQLite.
 
 **Definition of Done:** WorkItem and FailureRecord models implemented. All six item types validated. Serialization round-trip tests pass. Invalid input rejection tests for all constrained fields.
 
@@ -181,6 +181,7 @@ Each story below follows this structure:
 - Given a config file with `quality.co_regulation.enabled: false`, when loaded, then co-regulation is disabled.
 - Given a config file with an invalid value like `librarian.base_weights.staleness: 2.0` (weights should sum to 1.0 or be normalizable), when loaded, then the system either normalizes or raises a clear validation error.
 - Given a config file with `edge_types` containing a custom type, when loaded, then the custom type is appended to the default vocabulary (not replacing it).
+- Given a default configuration load, then the resulting config object contains `work_queue.retention_days` with a default value of 30.
 
 **Technical Notes:** API keys are referenced by environment variable name (e.g., `llm.api_key_env: ANTHROPIC_API_KEY`), never stored in the config file. The six default base priority weights must sum to 1.0: staleness (0.25), needs_review (0.20), coverage_gap (0.15), git_activity (0.10), semantic_delta (0.10), developer_proximity (0.20). The config module should expose a single `load_config(path: Path | None) -> Config` function and a `Config` typed object (dataclass or Pydantic model) for attribute-style access.
 
@@ -259,7 +260,7 @@ Each story below follows this structure:
 - Given a WorkItem, when `escalate_work_item` is called, then `escalated` is set to True.
 - Given multiple threads reading concurrently, when the store is accessed, then no locking errors occur (WAL mode enables concurrent reads).
 
-**Technical Notes:** Connection management must be thread-safe — use per-thread connections (thread-local pattern or a simple pool) per S-1 decision. The `failure_records` column is `TEXT NOT NULL DEFAULT '[]'` storing a JSON array. The `UNIQUE(source, target, edge_type)` constraint on edges prevents duplicate relationships. All timestamps stored as ISO 8601 text strings. The vec0 table uses `FLOAT[768]` dimensions per S-2 decision.
+**Technical Notes:** Connection management must be thread-safe — use per-thread connections (thread-local pattern or a simple pool) per S-1 decision. The `failure_records` column is `TEXT NOT NULL DEFAULT '[]'` storing a JSON array. The `UNIQUE(source, target, edge_type)` constraint on edges prevents duplicate relationships. All timestamps stored as ISO 8601 text strings. The vec0 table uses `FLOAT[768]` dimensions per S-2 decision. The index for work items must be created on `base_priority_score DESC`, not `priority_score`.
 
 **Definition of Done:** Full schema creation. All CRUD operations for all four entity types. Connection pooling working. Thread safety verified. Unit tests for every CRUD method including edge cases (duplicate names, referential integrity violations, concurrent access).
 
@@ -511,6 +512,7 @@ Each story below follows this structure:
 - Given the graph builder has already run on the same codebase, when run again with no changes, then no duplicate concepts or edges are created (upsert by fully-qualified symbol name).
 - Given a function that was renamed, when the builder runs on the updated code, then the old concept is updated (not duplicated) and its `updated_at` is refreshed.
 - Given parse results, when the builder runs, then every concept has at least one CodeReference with a valid `content_hash` (SHA-256 of the referenced code block).
+- Given parse results containing a function with parameters and return types, when the graph builder runs, then the created concept node stores those parameters and return types inside its `metadata` dictionary.
 
 **Technical Notes:** "Fully-qualified symbol name" means `file_path::class_name::method_name` or `file_path::function_name`. This is the upsert key. The builder should use the KnowledgeStore's `create_concept` and `create_edge` methods (or a bulk upsert variant if needed for performance).
 
@@ -1083,7 +1085,7 @@ Each story below follows this structure:
 - Given the start of a `librarian run`, when the orchestrator initializes, then it triggers the historical impact batch computation (Story 12.4) to refresh git co-change profiles before iteration begins.
 - Given resolved work items older than the configured retention policy, when the librarian loop initializes, then those items and their failure records are deleted from the database.
 
-**Technical Notes:** Per S-1, the loop orchestrator is an async function managing iterations via `asyncio.gather()` for concurrency within a single run. Each iteration is isolated. The adapter's `analyze` call is the async boundary. Everything else (storage reads/writes, quality checks) uses sync methods called from the thread pool.
+**Technical Notes:** Per S-1, the loop orchestrator is an async function managing iterations via `asyncio.gather()` for concurrency within a single run. Each iteration is isolated. The adapter's `analyze` call is the async boundary. Everything else (storage reads/writes, quality checks) uses sync methods called from the thread pool. Queue selection optimization: The loop should query SQLite for the top N unresolved work items ordered by `base_priority_score`, then apply the adaptive modulation (Epic 9) in-memory to those N items, and select the one with the highest effective score. This avoids running a full-table `UPDATE` on every iteration.
 
 **Definition of Done:** Loop executing the full 10-step sequence end-to-end. Integration verified with both Anthropic and Ollama adapters. Failure handling and retry working. Clean exit on empty queue.
 

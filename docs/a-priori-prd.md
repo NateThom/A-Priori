@@ -132,6 +132,7 @@ A concept is the fundamental unit of semantic knowledge in the graph. Concepts r
 | `derived_from_code_version` | string | No | Git commit hash from which this knowledge was derived |
 | `created_at` | timestamp | Yes | Creation time |
 | `updated_at` | timestamp | Yes | Last modification time |
+| `metadata` | optional dict | No | Additional structural or domain context (e.g., AST-extracted function parameters, return types). |
 
 ### 5.2 Code Reference (embedded in Concept)
 

@@ -105,7 +105,7 @@ Two changes from the previous architecture are worth calling out. First, the qua
 
 ### 2.2 Dependency Flow
 
-Dependencies flow strictly downward. No layer may import from a layer above it.
+Dependencies flow strictly downward. No layer may import from a layer above it. The diagram below is ordered by *runtime data flow* (how knowledge moves from analysis to integration), not by layer number. Import dependencies still respect the layer numbering: lower-numbered layers never import from higher-numbered ones.
 
 ```
 CLI / MCP Server / Audit UI Server  (entry points — thin shells)
@@ -114,13 +114,13 @@ CLI / MCP Server / Audit UI Server  (entry points — thin shells)
 Layer 3: Retrieval Interface
          │
          ▼
+Layer 1: Semantic Enrichment  ──► LLM Adapters (for analysis)
+         │
+         ▼
 Quality Assurance Pipeline  ──► LLM Adapters (for co-regulation review)
          │
          ▼
 Layer 2: Knowledge Management
-         │
-         ▼
-Layer 1: Semantic Enrichment  ──► LLM Adapters (for analysis)
          │
          ▼
 Layer 0: Structural Engine  ──► Tree-sitter, Git
@@ -156,6 +156,8 @@ The configuration schema must cover:
 
 **Impact profile settings:** staleness threshold for flagging profiles (default: 7 days), max traversal depth for blast radius (default: 5), default minimum confidence filter (default: 0.1).
 
+**Work queue settings:** `work_queue.retention_days` (default: 30) — resolved work items older than this are eligible for deletion.
+
 **Audit UI settings:** host (default: `127.0.0.1`), port (default: `8391`).
 
 All settings must have defaults that produce a working system with zero configuration beyond the LLM API key.
@@ -178,7 +180,7 @@ All data models should be implemented as Pydantic models with strict validation.
 
 Implements the schema from PRD §5.1.
 
-`id` is a UUID4, auto-generated on creation via `uuid.uuid4()`. `name` must be unique within a project; enforce at the storage layer with a unique index. `description` is markdown-compatible with no enforced length limit, but the librarian's prompt templates should guide output length. `labels` is a `set[str]` reserved for housekeeping metadata only — not domain knowledge. The initial label vocabulary is: `needs-review`, `auto-generated`, `deprecated`, `verified`, `stale`, `needs-human-review` (new — used by the escalation system). Labels are not validated against a vocabulary at the model level (they're extensible), but the initial set should be documented. `created_by` is a string enum: `"agent"` or `"human"`. `confidence` is a float clamped to `[0.0, 1.0]`. The model layer must enforce this range via Pydantic validator. `derived_from_code_version` is a git commit hash (40-character hex string), nullable for human-created concepts that aren't derived from specific code.
+`id` is a UUID4, auto-generated on creation via `uuid.uuid4()`. `name` must be unique within a project; enforce at the storage layer with a unique index. `description` is markdown-compatible with no enforced length limit, but the librarian's prompt templates should guide output length. `labels` is a `set[str]` reserved for housekeeping metadata only — not domain knowledge. The initial label vocabulary is: `needs-review`, `auto-generated`, `deprecated`, `verified`, `stale`, `needs-human-review` (new — used by the escalation system). Labels are not validated against a vocabulary at the model level (they're extensible), but the initial set should be documented. `created_by` is a string enum: `"agent"` or `"human"`. `confidence` is a float clamped to `[0.0, 1.0]`. The model layer must enforce this range via Pydantic validator. `derived_from_code_version` is a git commit hash (40-character hex string), nullable for human-created concepts that aren't derived from specific code. `metadata` is `dict | None`, defaulting to `None`. It holds arbitrary structural or domain context — the primary intended use is storing AST-extracted details such as function parameters and return types.
 
 #### 3.1.2 Code Reference (`models/concept.py`, embedded)
 
@@ -202,7 +204,7 @@ The new failure tracking fields are:
 
 `escalated` is a boolean, initially `False`. Set to `True` when `failure_count` reaches the configured escalation threshold (default: 3). Once escalated, the work item's effective priority is reduced and it is flagged for human attention.
 
-`priority_score` is a computed float, recalculated fresh on each librarian iteration start. For escalated items, the computed score is multiplied by the configured reduction factor (default: 0.5).
+`base_priority_score` is a computed float, recalculated fresh on each librarian iteration start and stored in the database. For escalated items, the computed score is multiplied by the configured reduction factor (default: 0.5).
 
 Resolved items should be retained for telemetry but excluded from the active work queue. A configurable retention policy (e.g., delete resolved items older than 30 days) should be implemented.
 
@@ -260,7 +262,8 @@ CREATE TABLE concepts (
     derived_from_code_version TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    impact_profile TEXT               -- JSON serialized ImpactProfile
+    impact_profile TEXT,              -- JSON serialized ImpactProfile
+    metadata TEXT                     -- JSON dictionary
 );
 
 CREATE VIRTUAL TABLE concepts_fts USING fts5(
@@ -297,7 +300,7 @@ CREATE TABLE work_items (
     description TEXT NOT NULL,
     concept_id TEXT REFERENCES concepts(id) ON DELETE SET NULL,
     file_path TEXT,
-    priority_score REAL NOT NULL DEFAULT 0.0,
+    base_priority_score REAL NOT NULL DEFAULT 0.0,
     resolved INTEGER NOT NULL DEFAULT 0,
     failure_count INTEGER NOT NULL DEFAULT 0,
     failure_records TEXT NOT NULL DEFAULT '[]',   -- JSON array of FailureRecord objects
@@ -307,7 +310,7 @@ CREATE TABLE work_items (
 );
 
 CREATE INDEX idx_work_items_resolved ON work_items(resolved);
-CREATE INDEX idx_work_items_priority ON work_items(priority_score DESC);
+CREATE INDEX idx_work_items_priority ON work_items(base_priority_score DESC);
 CREATE INDEX idx_work_items_escalated ON work_items(escalated);
 
 -- New: Review outcomes table for Level 2 human review tracking
@@ -441,7 +444,7 @@ A single iteration follows this exact sequence, updated from PRD §6.2:
 6. **Call LLM.** Send the prompt to the configured LLM via the adapter. Track token consumption.
 7. **Level 1: Automated consistency check.** Run the output through `quality/level1.py`. If it fails: write a FailureRecord to the work item (with `failure_reason` identifying the specific check), increment `failure_count`, check if escalation threshold is reached (if so, escalate), and exit.
 8. **Level 1.5: Co-regulation review (if enabled).** Run the output through `quality/level15.py`, which makes a second LLM call. If it fails: write a FailureRecord with the co-regulation assessment's dimensional scores and feedback, increment `failure_count`, check for escalation, and exit.
-9. **Integrate knowledge.** Pass the validated output to the Knowledge Manager (§4.4) for graph integration.
+9. **Integrate knowledge.** Pass the validated output to the Knowledge Manager (§4.5) for graph integration.
 10. **Mark resolved.** Mark the work item as resolved with a timestamp and exit.
 
 Each iteration is isolated. No state is carried between iterations except through the knowledge graph and work queue on disk.
@@ -504,6 +507,8 @@ for weight_name in metric_weight_map[metric]:
 For blast radius completeness, the modulation is applied differently: rather than boosting a weight factor, the engine directly boosts the priority score of all work items with `item_type == "analyze_impact"` by `(1 + blast_deficit * modulation_strength)`. This is because blast radius completeness doesn't map cleanly to one of the six weight factors — it maps to a work item type. *(Note: `blast_radius_completeness` deficit calculations and the resulting `analyze_impact` boosting are inactive until Phase 3).*
 
 For escalated items, after computing the modulated priority, multiply by the configured reduction factor (default: 0.5).
+
+To avoid expensive full-table updates on every iteration, the database stores the `base_priority_score`. The orchestrator fetches a batch of the highest base-priority items, applies adaptive modulation in-memory, and selects the item with the highest effective score.
 
 The telemetry output of each priority computation cycle must include: the current metric values, their targets, the computed deficits, the resulting effective weights (before and after modulation), and the work item selected and its score. This feeds the health dashboard in the audit UI.
 
