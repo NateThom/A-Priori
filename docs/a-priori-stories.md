@@ -542,6 +542,27 @@ Each story below follows this structure:
 
 ---
 
+#### Story 3.7: Code Reference Resolution
+
+**As a** system resolving concept-to-code links, **I want** the repair chain to try symbol lookup first, fall back to content hash matching, and finally use semantic anchor search **so that** code references survive renames, refactors, and file moves without losing the concept-to-code link.
+
+**Context:** PRD §5.2 defines the three-step repair chain: symbol → content_hash → semantic_anchor. ERD §3.1.2 notes the resolution order is enforced in the retrieval layer, not the model. The model (Story 1.1) and content hash generation (Story 3.5) exist, but the runtime resolution algorithm that executes the fallback chain does not.
+
+**Acceptance Criteria:**
+
+- Given a code reference with a valid symbol, when resolved, then symbol lookup succeeds and the content hash is verified against current code.
+- Given a code reference whose symbol was renamed but content is unchanged, when symbol lookup fails, then the content hash is used to locate the code by scanning the referenced file, and the symbol is updated.
+- Given a code reference whose symbol was renamed and content changed, when both symbol and hash fail, then the semantic anchor is used as a fallback description for re-finding the code (requires LLM; expensive path).
+- Given all three resolution methods fail, when resolution is attempted, then the code reference is marked unresolved and the parent concept is labeled `needs-review`.
+
+**Technical Notes:** Symbol lookup should succeed ~80% of the time (PRD §5.2). Content hash comparison is a SHA-256 check — fast and deterministic. Semantic anchor resolution is the expensive fallback and should only be invoked when both prior steps fail. The resolution function should return a result indicating which method succeeded (or that all failed) for telemetry.
+
+**Definition of Done:** Three-step fallback implemented. Each step tested independently. Graceful degradation on total failure. Parent concept correctly labeled on unresolved reference.
+
+**Intra-epic dependencies:** Story 3.5 (graph builder produces content hashes), Story 1.1 (CodeReference model).
+
+---
+
 ### Epic 4: MCP Server
 
 **Epic goal:** Expose the knowledge graph via 13 MCP tools over stdio.
@@ -1097,7 +1118,7 @@ Each story below follows this structure:
 - Given a per-iteration limit of 5,000 tokens, when a prompt exceeds it, then the graph context is truncated (not the code) to fit, and a warning is logged.
 - Given co-regulation is enabled, when per-iteration cost is estimated, then it accounts for both the analysis call and the review call.
 - Given co-regulation is enabled and the analysis call completes within budget but the review call would exceed it, when the iteration proceeds, then the review call is still made (never skip quality checks to save tokens).
-- Given the run completes, when telemetry is output, then it includes: total iterations, total tokens (analysis vs. review breakdown), concepts created/updated, edges created/updated, work items resolved, work items failed, work items escalated.
+- Given the run completes, when telemetry is output, then it includes: total iterations, total tokens (analysis vs. review breakdown), concepts created/updated, edges created/updated, work items resolved, work items failed, work items escalated, and iteration yield (total mutations / total iterations) per PRD §9.2.
 
 **Technical Notes:** Token estimation uses a running average of recent iterations to predict the next iteration's cost. The per-iteration limit uses `get_token_count` from the adapter for prompt sizing. Context truncation strategy: reduce graph context (neighbor concepts, distant edges) while preserving the code being analyzed and the structural context.
 
@@ -1390,6 +1411,26 @@ Each story below follows this structure:
 
 ---
 
+#### Story 12.7: Blast Radius Accuracy Validation
+
+**As a** technical lead, **I want** blast radius predictions validated against historical PRs using the S-4 methodology **so that** I have evidence the system meets its accuracy targets before shipping.
+
+**Context:** PRD §9.1 requires >70% recall and >50% precision for blast radius predictions, measured against actual file changes in historical PRs. Spike S-4 (Story 12.1) designs the validation methodology. This story applies that methodology. ERD §5.4 acceptance criterion #5.
+
+**Acceptance Criteria:**
+
+- Given at least 50 historical PRs in the test repository (identified by S-4 spike), when blast radius predictions are compared to actual file changes in each PR, then recall is ≥70% (the percentage of actually-affected files that A-Priori predicted).
+- Given the same PR set, when precision is measured, then precision is ≥50% (the percentage of predicted files that were actually affected).
+- Given the validation results, when reviewed, then a written report documents per-PR results, aggregate metrics, and identified failure patterns (e.g., types of changes the system consistently misses).
+
+**Technical Notes:** The S-4 spike defines the test harness, test repository, and methodology. This story runs it. If accuracy targets are not met, the report should identify the most impactful improvements (e.g., missing edge types, confidence calibration issues) to guide iteration.
+
+**Definition of Done:** Validation run against ≥50 PRs. Results documented. Recall and precision measured and reported. If targets are not met, failure analysis completed with recommended improvements.
+
+**Intra-epic dependencies:** Story 12.1 (methodology), Story 12.5 (profiles stored), Story 12.6 (blast_radius tool functional).
+
+---
+
 ## Phase 4: Polish & Scale
 
 ---
@@ -1481,6 +1522,7 @@ Now that all stories are defined, the following cross-epic dependencies emerge:
 11. **Epics 6 + 7 + 8 + 9 → Story 10.1:** The librarian orchestrator wires all four together.
 12. **Stories 12.2 + 12.3 + 12.4 → Story 12.5:** Profile storage needs all three computation layers.
 13. **Story 12.5 → Story 12.6:** The MCP tool queries stored profiles.
+14. **Story 12.6 → Story 12.7:** Accuracy validation requires the blast_radius tool to be functional.
 
 ### Parallelization Opportunities
 
@@ -1504,7 +1546,7 @@ These stories are on the critical path and block the most downstream work:
 |-------|------|---------|--------|
 | 1 | Epic 1: Models & Config | 5 | 0 |
 | 1 | Epic 2: Storage Layer | 9 | 1 (S-5) |
-| 1 | Epic 3: Structural Engine | 6 | 1 (S-3) |
+| 1 | Epic 3: Structural Engine | 7 | 1 (S-3) |
 | 1 | Epic 4: MCP Server | 3 | 0 |
 | 1 | Epic 5: CLI & First-Run | 2 | 0 |
 | 2 | Epic 6: LLM Adapters | 4 | 0 |
@@ -1513,9 +1555,9 @@ These stories are on the critical path and block the most downstream work:
 | 2 | Epic 9: Priority & Metrics | 3 | 0 |
 | 2 | Epic 10: Librarian Orchestrator | 3 | 0 |
 | 2 | Epic 11: Audit UI | 7 | 1 (S-7) |
-| 3 | Epic 12: Blast Radius | 6 | 1 (S-4) |
+| 3 | Epic 12: Blast Radius | 7 | 1 (S-4) |
 | 4 | Epic 13: Polish & Docs | 3 | 0 |
-| **Total** | **13 epics** | **59 stories** | **5 spikes** |
+| **Total** | **13 epics** | **61 stories** | **5 spikes** |
 
 ---
 

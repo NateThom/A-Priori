@@ -383,7 +383,7 @@ Uses `git diff --name-only {last_hash}..HEAD` or equivalent. Must not re-parse u
 
 Thin wrapper that registers tools and delegates to the core library. Uses the MCP Python SDK. Each tool function should be 10–20 lines of glue code: parse input, call core library, format and return result. All validation and business logic lives in the core library.
 
-**Phase 1 read tools:** `search` (full implementation with `keyword`, `exact`, and `file` modes; `semantic` mode may be deferred per Spike S-2), `traverse` (full), `get_concept` (full), `list_edge_types` (full), `get_status` (full).
+**Phase 1 read tools:** `search` (full implementation with `keyword`, `exact`, `file`, and `semantic` modes; `semantic` mode uses local embeddings via e5-base-v2 per S-2 decision), `traverse` (full), `get_concept` (full), `list_edge_types` (full), `get_status` (full).
 
 **Deferred to Phase 3:** `blast_radius`.
 
@@ -584,7 +584,7 @@ New module. Computes the three core product metrics from PRD §9.1 that serve du
 
 **Coverage:** `count(distinct files referenced by at least one concept) / count(total source files)`. "Total source files" is determined by the same glob patterns the structural parser uses. Files excluded from parsing are excluded from the denominator.
 
-**Freshness:** `count(concepts where last_verified > last_code_modification) / count(concepts referencing actively-developed files)`. "Actively-developed files" means files modified in the last 30 days (configurable). Concepts referencing only inactive files are excluded from this metric.
+**Freshness:** `count(concepts where last_verified > last_code_modification) / count(concepts referencing actively-developed files)`. "Actively-developed files" means files modified in the last 30 days (configurable). Concepts referencing only inactive files are excluded from this metric. Concepts with `last_verified = NULL` (never verified) are excluded from the freshness denominator — they are "unverified," not "stale." Freshness measures how current the verified knowledge is, not how much of the codebase has been verified (see coverage metric).
 
 **Blast radius completeness:** `count(concepts with non-stale impact profile) / count(total concepts)`. A profile is "stale" if its `last_computed` timestamp is older than the configurable staleness threshold.
 
@@ -667,7 +667,7 @@ Phase 3 delivers the impact profile data model, three-layer impact computation, 
 
 **Structural impact:** BFS traversal of structural edges (`calls`, `imports`, `inherits`, `type-references`) from the target concept. Each hop increments depth. All entries have `confidence = 1.0`. Deterministic and fast. Recomputed when structural graph changes.
 
-**Semantic impact:** BFS traversal of semantic edges (`depends-on`, `implements`, `shares-assumption-about`, `extends`, `supersedes`). Confidence is the product of edge confidences along the path (degrades with each hop). Depends on the semantic layer being populated. Profiles with no semantic data must be flagged as "structural only."
+**Semantic impact:** BFS traversal of semantic edges (`depends-on`, `implements`, `shares-assumption-about`, `extends`, `supersedes`). `relates-to` and `owned-by` are intentionally excluded — `relates-to` is a weak generic association that would generate false positives, and `owned-by` is organizational metadata rather than a functional dependency. Confidence is the product of edge confidences along the path (degrades with each hop). Depends on the semantic layer being populated. Profiles with no semantic data must be flagged as "structural only."
 
 **Historical impact:** Analyze git log for commits touching the target concept's files. For co-occurring files, compute confidence proportional to co-change frequency with recency decay. Should be batched rather than per-concept.
 

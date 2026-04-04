@@ -26,7 +26,7 @@ Phase 1 delivers a structural knowledge graph with no LLM dependency. A user can
 
 **Prerequisites:** None. This is the first epic and has no dependencies.
 
-**Scope:** Implement all Pydantic models defined in the ERD §3.1 (Concept, CodeReference, Edge, WorkItem, FailureRecord, CoRegulationAssessment, ReviewOutcome), the edge type vocabulary with validation, and the configuration loading system with defaults, YAML parsing, and typed access. The FailureRecord and review-related models are defined here but not exercised until Phase 2 — they need to exist in Phase 1 because the storage schema references them.
+**Scope:** Implement all Pydantic models defined in the ERD §3.1 (Concept, CodeReference, Edge, WorkItem, FailureRecord, CoRegulationAssessment, ReviewOutcome) and the ImpactProfile and ImpactEntry models from PRD §5.5, the edge type vocabulary with validation, and the configuration loading system with defaults, YAML parsing, and typed access. The FailureRecord, review-related, and impact profile models are defined here but not exercised until later phases — they need to exist in Phase 1 because the storage schema references them (e.g., the `impact_profile` column on the concepts table), avoiding a migration.
 
 **Key Stories:**
 
@@ -94,7 +94,7 @@ The change detector integrates with git to identify files changed since the last
 
 **Goal:** Expose the knowledge graph to AI coding agents via 13 MCP tools (6 read, 7 write) using FastMCP over stdio.
 
-**Prerequisites:** Epic 2 (Storage Layer) and Epic 3 (Structural Engine) should be substantially complete — the MCP tools need a populated graph to be useful, and they delegate all operations to the storage and retrieval layers.
+**Prerequisites:** Epic 2 (Storage Layer). Epic 4 can be developed in parallel with Epic 3 — the MCP tools read from and write to the KnowledgeStore and do not depend on the structural engine directly. A populated graph makes testing more meaningful, but is not required for implementation.
 
 **Scope:** The FastMCP server setup with lifespan context manager (per S-6), the `safe_tool` error handling decorator (per S-6), all 13 tool handler functions, and stdio transport. The `blast_radius` tool is registered but returns a "not yet available" message until Phase 3.
 

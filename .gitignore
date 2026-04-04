@@ -27,6 +27,7 @@ htmlcov/
 
 # OS
 Thumbs.db
+.DS_Store
 
 # A-Priori runtime artifacts
 .apriori/index.db

@@ -106,9 +106,9 @@ The storage layer is defined by an abstract protocol (`KnowledgeStore`) that ena
 
 ### 4.4 Model-Agnostic Design
 
-The interface between the librarian orchestrator and the LLM is a clean adapter abstraction. Adapters exist for cloud providers (Claude/Anthropic API, OpenAI API) and local model runtimes (Ollama). Model-specific prompt templates optimize quality for each provider while keeping all orchestration and knowledge management logic model-agnostic.
+The interface between the librarian orchestrator and the LLM is a clean adapter abstraction. MVP adapters cover Anthropic API (cloud) and Ollama (local). The adapter interface is designed to support additional providers (OpenAI API, other cloud or local runtimes) post-MVP. Model-specific prompt templates optimize quality for each provider while keeping all orchestration and knowledge management logic model-agnostic.
 
-The user configures their LLM provider by specifying API credentials and model selection. Multi-model routing is supported: a user can configure a cheaper model (e.g., local Qwen 7B via Ollama) for routine function-level summarization and reserve a more capable model (e.g., Claude Sonnet via API) for deep architectural analysis. The adapter interface handles routing based on analysis complexity.
+The user configures their LLM provider by specifying API credentials and model selection. The adapter interface is designed to support multi-model routing in the future: a user will be able to configure a cheaper model (e.g., local Qwen 7B via Ollama) for routine work and reserve a more capable model (e.g., Claude Sonnet via API) for complex analysis. Multi-model routing is deferred to post-MVP (see §10.2). For MVP, a single configured model is used for all analysis.
 
 ---
 
@@ -249,7 +249,7 @@ Each `FailureRecord` contains:
 | `quality_scores` | optional dict | Scores from the co-regulation review, if applicable |
 | `reviewer_feedback` | optional string | Specific feedback from the co-regulation agent for use in retry |
 
-When a work item's `failure_count` reaches a configurable threshold (default: 3), the item shall be escalated. Escalation moves the item to a lower priority tier, flags it with `needs-human-review`, and if multi-model routing is configured, marks it for processing by a more capable model on the next attempt. The failure records are preserved so that any future attempt — whether by the librarian or a human — has full diagnostic context about what was tried and why it failed.
+When a work item's `failure_count` reaches a configurable threshold (default: 3), the item shall be escalated. Escalation moves the item to a lower priority tier, flags it with `needs-human-review`, and if multi-model routing is configured (post-MVP, see §10.2), marks it for processing by a more capable model on the next attempt. The failure records are preserved so that any future attempt — whether by the librarian or a human — has full diagnostic context about what was tried and why it failed.
 
 **Work item types:**
 
@@ -261,6 +261,14 @@ When a work item's `failure_count` reaches a configurable threshold (default: 3)
 | `reported_gap` | External agent via `report_gap` MCP tool | An agent or human flagged a knowledge gap |
 | `review_concept` | Label trigger | Concept is labeled `needs-review` |
 | `analyze_impact` | Structural layer (dependency graph changed) | A concept's structural dependencies changed; impact profile needs recomputation |
+
+### 5.7 Co-Regulation Assessment (output of Level 1.5 review)
+
+The co-regulation review (§6.4.2) shall produce a structured assessment containing: a score (0.0–1.0) on each of the three quality dimensions (specificity, structural corroboration, completeness), a composite pass/fail verdict, and on failure, specific feedback identifying what was insufficient. This assessment is stored as part of the work item's failure record on failure, or discarded on pass.
+
+### 5.8 Review Outcome (output of Level 2 human review)
+
+When a human reviews a concept through the audit UI (§8A.3), the system shall record: the concept reviewed, the reviewer identity, the action taken (verified, corrected, or flagged), and for corrections, the type of error found (description wrong, relationship missing, relationship hallucinated, confidence miscalibrated, or other) and the correction details. These records feed the librarian's error profile (§6.4.4).
 
 ---
 
@@ -378,7 +386,7 @@ The most powerful review mechanism requires the least human effort but is deferr
 
 ### 6.5 Token Budget Management
 
-The product shall help users understand and control their LLM spending. This includes a configurable maximum token budget per iteration (preventing any single analysis from consuming excessive resources), a configurable maximum iterations per loop run (controlling total spend for a background session), telemetry tracking tokens consumed, knowledge nodes created/updated, and work items resolved per run, and progressive enrichment on initial setup — when bootstrapping a new codebase, the librarian shall start with the developer's actively-edited files and expand outward based on configured budget limits rather than attempting to analyze the entire codebase at once.
+The product shall help users understand and control their LLM spending. This includes a configurable maximum token budget per iteration (preventing any single analysis from consuming excessive resources), a configurable maximum iterations per loop run (controlling total spend for a background session), and telemetry tracking tokens consumed, knowledge nodes created/updated, and work items resolved per run. Additionally, progressive enrichment should be supported on initial setup — when bootstrapping a new codebase, the librarian should start with the developer's actively-edited files and expand outward based on configured budget limits rather than attempting to analyze the entire codebase at once. Progressive enrichment is described here because it is conceptually part of the cost control system, but it is scheduled for Phase 4 implementation (see §12).
 
 ---
 
@@ -456,7 +464,7 @@ The audit UI is an **audit and review interface**, not a management application.
 
 ### 8A.2 Deployment Model
 
-The audit UI shall be a locally-served single-page web application, started via a shell command (`apriori-ui`). It serves on localhost and reads from the same SQLite database that the MCP server and librarian use. It does not require authentication (it runs on the developer's local machine), does not require internet connectivity, and does not transmit any data externally.
+The audit UI shall be a locally-served single-page web application, started via a shell command (`apriori ui`). It serves on localhost and reads from the same SQLite database that the MCP server and librarian use. It does not require authentication (it runs on the developer's local machine), does not require internet connectivity, and does not transmit any data externally.
 
 ### 8A.3 Required Capabilities
 
@@ -480,7 +488,7 @@ The success metrics defined in this section serve a dual purpose. They are the p
 
 **Knowledge coverage** shall be measured as the percentage of source files in the repository that are referenced by at least one concept. The target for a fully-indexed codebase is greater than 80% file coverage.
 
-**Knowledge freshness** shall be measured as the percentage of concepts whose `last_verified` timestamp is more recent than the last modification time of their referenced code. The target is greater than 90% freshness for actively-developed code (files modified in the last 30 days).
+**Knowledge freshness** shall be measured as the percentage of concepts whose `last_verified` timestamp is more recent than the last modification time of their referenced code. The target is greater than 90% freshness for actively-developed code (files modified in the last 30 days). Concepts that have never been verified (`last_verified` is null) are excluded from the freshness calculation — they are not yet part of the verified knowledge base. Freshness measures how current the verified knowledge is, not how much of the codebase has been verified (which is the coverage metric's concern).
 
 **Blast radius accuracy** shall be measured by comparing A-Priori's predicted impact set for a change against the actual set of files modified in the corresponding pull request (using historical PRs as ground truth). The target is greater than 70% recall (the percentage of actually-affected files that A-Priori predicted) and greater than 50% precision (the percentage of predicted files that were actually affected).
 
@@ -556,7 +564,7 @@ Deliver the structural engine (Layer 0), the core data model, the storage layer 
 
 ### Phase 2: Semantic Intelligence & Audit
 
-Deliver the librarian agent system (Layer 1), the model-agnostic adapter layer, the knowledge management layer (Layer 2), the work queue system with failure records and adaptive priority modulation, the co-regulation review (LLM-as-judge), and the human audit UI. At the end of this phase, the librarian can autonomously analyze code using the user's LLM and build semantic knowledge (concept descriptions, semantic relationships, pattern labels) on top of the structural graph. The co-regulation agent validates each iteration's output before it enters the graph. Engineers can inspect the knowledge graph, review the librarian's work, and verify or correct concepts through the audit UI. The knowledge graph evolves over time as the librarian runs, with quality assured by automated checks, LLM review, and human oversight.
+Deliver the librarian agent system (Layer 1), the model-agnostic adapter layer, the knowledge management layer (Layer 2), the work queue system with failure records and adaptive priority modulation, the co-regulation review (LLM-as-judge), token budget management with cost telemetry, and the human audit UI. At the end of this phase, the librarian can autonomously analyze code using the user's LLM and build semantic knowledge (concept descriptions, semantic relationships, pattern labels) on top of the structural graph. The co-regulation agent validates each iteration's output before it enters the graph. Token budget limits prevent runaway LLM spending. Engineers can inspect the knowledge graph, review the librarian's work, and verify or correct concepts through the audit UI. The knowledge graph evolves over time as the librarian runs, with quality assured by automated checks, LLM review, and human oversight.
 
 ### Phase 3: Blast Radius
 
@@ -564,7 +572,7 @@ Deliver the impact profile data model, the three-layer impact computation (struc
 
 ### Phase 4: Polish & Scale
 
-Deliver token budget management and cost telemetry, progressive enrichment for initial bootstrapping, multi-model routing configuration, comprehensive CLI for setup, status, diagnostics, and manual queries, and documentation sufficient for self-service adoption.
+Deliver progressive enrichment for initial bootstrapping, comprehensive CLI for setup, status, diagnostics, and manual queries, and documentation sufficient for self-service adoption.
 
 ---
 
