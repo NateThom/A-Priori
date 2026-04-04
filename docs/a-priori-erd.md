@@ -142,11 +142,11 @@ The configuration schema must cover:
 
 **LLM provider settings:** provider name, API key reference (environment variable name, never stored in config), model name, max tokens per request, temperature. Optional separate review model for co-regulation (defaults to same as analysis model).
 
-**Librarian settings:** max iterations per run, max tokens per iteration (must account for co-regulation cost when enabled), base priority weights (the six weights from PRD §6.3), developer proximity window (how many recent git commits to consider).
+**Librarian settings:** max iterations per run, max tokens per iteration (must account for co-regulation cost when enabled), base priority weights (the six weights from PRD §6.3; must sum to 1.0 — if user-configured weights do not sum to 1.0, the configuration system shall normalize them proportionally and log a warning), developer proximity window (how many recent git commits to consider).
 
 **Adaptive modulation settings:** `modulation_strength` (default: 1.0, 0.0 disables), `coverage_target` (default: 0.80), `freshness_target` (default: 0.90), `blast_radius_completeness_target` (default: 0.70).
 
-**Quality assurance settings:** co-regulation review enabled/disabled (default: enabled), structural corroboration confidence penalty (default: 0.2), failure escalation threshold (default: 3), escalation priority reduction factor (default: 0.5).
+**Quality assurance settings:** co-regulation review enabled/disabled (`quality.co_regulation.enabled`, default: `true`), structural corroboration confidence penalty (default: 0.2), failure escalation threshold (default: 3), escalation priority reduction factor (default: 0.5).
 
 **Storage settings:** SQLite database path, YAML directory path, sqlite-vec index dimensions.
 
@@ -154,7 +154,7 @@ The configuration schema must cover:
 
 **Edge type vocabulary:** the controlled vocabulary from PRD §5.4, extensible by the user.
 
-**Impact profile settings:** staleness threshold for flagging profiles, max traversal depth for blast radius, default minimum confidence filter.
+**Impact profile settings:** staleness threshold for flagging profiles (default: 7 days), max traversal depth for blast radius (default: 5), default minimum confidence filter (default: 0.1).
 
 **Audit UI settings:** host (default: `127.0.0.1`), port (default: `8391`).
 
@@ -267,10 +267,10 @@ CREATE VIRTUAL TABLE concepts_fts USING fts5(
     name, description, content='concepts', content_rowid='rowid'
 );
 
--- Dimensions determined by embedding strategy (see Spike S-2)
+-- Dimensions: 768 per S-2 decision (e5-base-v2 via sentence-transformers)
 CREATE VIRTUAL TABLE concept_embeddings USING vec0(
     concept_id TEXT PRIMARY KEY,
-    embedding FLOAT[{dimensions}]
+    embedding FLOAT[768]
 );
 
 CREATE TABLE edges (
@@ -325,7 +325,7 @@ CREATE INDEX idx_review_outcomes_concept ON review_outcomes(concept_id);
 CREATE INDEX idx_review_outcomes_action ON review_outcomes(action);
 ```
 
-Key implementation decisions: All timestamps are ISO 8601 text strings. Foreign key enforcement is explicitly enabled per connection (`PRAGMA foreign_keys = ON`). WAL mode is enabled for concurrent read access while the librarian writes (`PRAGMA journal_mode = WAL`). The `UNIQUE` constraint on edges prevents duplicate relationships. The `failure_records` column is a JSON array that can grow — at escalation threshold (default 3 records), the array contains roughly 1–3KB of JSON, which is well within SQLite's practical limits.
+Key implementation decisions: All timestamps are ISO 8601 text strings. Foreign key enforcement is explicitly enabled per connection (`PRAGMA foreign_keys = ON`). WAL mode is enabled for concurrent read access while the librarian writes (`PRAGMA journal_mode = WAL`). The `UNIQUE` constraint on edges prevents duplicate relationships. The `failure_records` column is a JSON array that can grow — at escalation threshold (default 3 records), the array contains roughly 1–3KB of JSON, which is well within SQLite's practical limits. After escalation, failure records are retained for diagnostic purposes. Failure records are cleaned up alongside their parent work item when the work item retention policy runs (see §3.1.4).
 
 #### 3.2.3 YAML Flat File Store (`storage/yaml_store.py`)
 
@@ -632,6 +632,8 @@ The frontend must implement five capabilities from the PRD:
 
 ### 4.8 Token Budget Management
 
+**Phase: Phase 2 for token budget enforcement; progressive enrichment is deferred to Phase 4 per PRD §6.5 and §12.**
+
 Implements PRD §6.5. The librarian must enforce: per-iteration token limit (if prompt plus response exceeds the limit, truncate graph context — not the code — to fit; log warning on truncation), per-run iteration limit, per-run token limit (stop if cumulative total would exceed budget on next iteration, estimated from running average).
 
 Critical new consideration: when co-regulation review is enabled, the per-iteration cost is approximately doubled (one call for analysis, one for review). The budget management system must account for this by estimating per-iteration cost as `analysis_tokens + review_tokens` and enforcing the budget against the combined cost. If only the analysis call completes before the budget would be exceeded by the review call, the iteration should proceed (you don't want to skip the quality check to save tokens — that defeats the purpose).
@@ -717,17 +719,21 @@ Phase 4 is complete when: (1) Progressive enrichment correctly prioritizes devel
 
 ## 7. Areas of Concern and Required Spikes
 
-### S-1: Async Architecture Decision
+### S-1: Async Architecture Decision — **DECIDED**
 
-**Question:** Should the core library be async-first (`asyncio`) or synchronous? The MCP Python SDK may impose constraints. The librarian and co-regulation review both make network calls that benefit from async.
+**Decision:** Core library functions are synchronous (`def`); LLM adapter calls and MCP server handlers are async (`async def`). See spike decision document in `spikes/` directory.
+
+**Original question:** Should the core library be async-first (`asyncio`) or synchronous? The MCP Python SDK may impose constraints. The librarian and co-regulation review both make network calls that benefit from async.
 
 **Risk if skipped:** Retrofitting async into a synchronous codebase is extremely expensive. Must be decided before Phase 1.
 
 **Timebox:** 2–3 hours. Evaluate MCP Python SDK execution model, test `aiosqlite` with sqlite-vec, decide.
 
-### S-2: Embedding Strategy for Vector Search
+### S-2: Embedding Strategy for Vector Search — **DECIDED**
 
-**Question:** How will concept embeddings be generated for the `semantic` search mode? Options: (a) configured LLM generates embeddings (adds cost), (b) separate local embedding model like `all-MiniLM-L6-v2` via `sentence-transformers` (free, fast), (c) defer vector search to Phase 2. Embedding dimension must be known at schema creation time.
+**Decision:** Use `intfloat/e5-base-v2` via `sentence-transformers` for local embedding generation. 768-dimensional vectors, cosine distance, ~440MB model download cached in `~/.cache/huggingface/`. See spike decision document in `spikes/` directory.
+
+**Original question:** How will concept embeddings be generated for the `semantic` search mode? Options: (a) configured LLM generates embeddings (adds cost), (b) separate local embedding model like `all-MiniLM-L6-v2` via `sentence-transformers` (free, fast), (c) defer vector search to Phase 2. Embedding dimension must be known at schema creation time.
 
 **Timebox:** 3–4 hours. Test `sentence-transformers` integration, measure performance, decide on dimensions.
 
@@ -749,9 +755,11 @@ Phase 4 is complete when: (1) Progressive enrichment correctly prioritizes devel
 
 **Timebox:** 2 hours. Generate synthetic files, measure, decide.
 
-### S-6: MCP Python SDK Capabilities and Constraints
+### S-6: MCP Python SDK Capabilities and Constraints — **DECIDED**
 
-**Question:** What does the SDK support for tool registration, schemas, error handling, server lifecycle?
+**Decision:** Use FastMCP framework, pinned to `mcp>=1.26,<2.0`. All tools are plain `def` decorated with `@mcp.tool()` and `@safe_tool` (3–10 lines each). Lifespan context manager initializes `KnowledgeStore`. See spike decision document in `spikes/` directory.
+
+**Original question:** What does the SDK support for tool registration, schemas, error handling, server lifecycle?
 
 **Timebox:** 2 hours. Build minimal MCP server, test with MCP client, document patterns.
 

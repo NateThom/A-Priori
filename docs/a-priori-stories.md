@@ -659,6 +659,7 @@ Each story below follows this structure:
 - Given any git repository with Python or TypeScript files, when `apriori init` is run with no prior setup, then `.apriori/` is created with a default `apriori.config.yaml`, SQLite database, and YAML concept files.
 - Given first-time initialization with no cached embedding model, when the model downloads, then progress is displayed ("Downloading embedding model (440MB, one-time)...").
 - Given a repository with 100 source files, when `apriori init` completes (excluding model download), then total time is under 60 seconds.
+- Given a synthetic repository with 10,000 source files, when `apriori init` completes (excluding model download), then total time is under 60 seconds (per ERD §3.6 and PRD §9.3 acceptance criteria).
 - Given init completes, when the user runs `apriori search "main"`, then they receive search results from the newly created graph.
 - Given init completes, when the user checks `apriori status`, then accurate metrics are reported (concept count, edge count, coverage).
 - Given init was already run, when `apriori init` is run again, then it detects the existing `.apriori/` directory and performs an incremental update (not a full re-parse).
