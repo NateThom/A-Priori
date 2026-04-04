@@ -531,7 +531,7 @@ Each story below follows this structure:
 - Given a modified function whose concept exists in the graph, when the change detector runs, then a `verify_concept` work item is created and the `needs-review` label is applied to the concept.
 - Given a newly added file, when the change detector runs, then an `investigate_file` work item is created for each new file.
 - Given a deleted function whose concept exists in the graph, when the change detector runs, then the concept is flagged (not immediately deleted — the knowledge manager handles cleanup).
-- Given structural edges have changed (e.g., a new import was added), when the change detector runs, then an `analyze_impact` work item is created for affected concepts.
+- Given structural edges have changed (e.g., a new import was added), when the change detector runs, then structural updates proceed *without* generating impact tasks in Phase 1 (impact task generation is deferred to Phase 3).
 - Given the change detector runs successfully, when it completes, then the stored last-analyzed commit hash is updated to HEAD.
 
 **Technical Notes:** Uses `git diff --name-only {last_hash}..HEAD` to identify changed files. For the first run (no last hash), all files are "changed." The detector must not re-parse unchanged files — only pass changed file paths to the parsing orchestrator. Content hash comparison (`CodeReference.content_hash`) is used to detect whether a concept's referenced code has actually changed.
@@ -629,6 +629,8 @@ Each story below follows this structure:
 - Given an existing concept, when `update_concept` is called with a new description, then the concept is updated and the updated concept is returned.
 - Given a concept with edges, when `delete_concept` is called, then the concept and its edges are removed.
 - Given two existing concepts and a valid edge type, when `create_edge` is called, then the edge is created.
+- Given an existing edge, when `update_edge` is called with a new confidence, then the edge is updated.
+- Given an existing edge, when `delete_edge` is called, then the edge is removed.
 - Given an invalid edge type, when `create_edge` is called, then an `isError=True` response is returned listing valid types.
 - Given a knowledge gap description, when `report_gap` is called, then a `reported_gap` work item is created in the work queue with the provided description and optional context.
 
@@ -1041,7 +1043,7 @@ Each story below follows this structure:
 
 - Given coverage at 0.50 (target 0.80, deficit 0.30) and freshness at 0.95 (target 0.90, deficit 0.0), when modulation runs with `modulation_strength = 1.0`, then the effective weight for `coverage_gap` is `0.15 * (1 + 0.30 * 1.0) = 0.195` while `staleness` and `needs_review` weights are unchanged.
 - Given `modulation_strength = 0.0`, when modulation runs, then effective weights equal base weights exactly (modulation disabled).
-- Given blast_radius_completeness below target, when modulation runs, then `analyze_impact` work items receive a direct priority score boost.
+- *(Deferred to Phase 3)* Given blast_radius_completeness below target, when modulation runs, then `analyze_impact` work items receive a direct priority score boost.
 - Given an escalated work item, when its final priority is computed, then it is multiplied by 0.5 (the configured reduction factor).
 - Given the modulation computation, when telemetry is emitted, then it includes: current metric values, targets, deficits, effective weights (before and after modulation), and the selected work item with its score.
 

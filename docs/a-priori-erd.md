@@ -373,7 +373,7 @@ The graph builder must be idempotent: running it twice on the same codebase prod
 
 #### 3.3.3 Change Detector (`structural/change_detector.py`)
 
-Integrates with git to detect code changes and populate the work queue. On invocation: (1) Determine changed files since last known analysis point (stored as git hash in config state; on first run, all files are "changed"). (2) Re-run structural parser and graph builder on changed files. (3) For each concept whose code references have mismatched content hashes, generate a `verify_concept` work item and add `needs-review` label. (4) For each new file, generate an `investigate_file` work item. (5) For each concept whose structural edges changed, generate an `analyze_impact` work item. (6) Update stored analysis point to current HEAD.
+Integrates with git to detect code changes and populate the work queue. On invocation: (1) Determine changed files since last known analysis point (stored as git hash in config state; on first run, all files are "changed"). (2) Re-run structural parser and graph builder on changed files. (3) For each concept whose code references have mismatched content hashes, generate a `verify_concept` work item and add `needs-review` label. (4) For each new file, generate an `investigate_file` work item. (5) *(Deferred to Phase 3)* For each concept whose structural edges changed, generate an `analyze_impact` work item. (6) Update stored analysis point to current HEAD.
 
 Uses `git diff --name-only {last_hash}..HEAD` or equivalent. Must not re-parse unchanged files.
 
@@ -397,7 +397,7 @@ Phase 1 commands: `apriori init` (initialize project, create `.apriori/`, genera
 
 ### 3.6 Phase 1 Acceptance Criteria
 
-Phase 1 is complete when: (1) `apriori init` successfully parses a Python or TypeScript repository and produces a structural knowledge graph with concept nodes and structural edges. (2) The MCP server starts and all Phase 1 tools respond correctly. (3) The knowledge graph is persisted in both SQLite and YAML, and `rebuild-index` reconstructs SQLite with no data loss. (4) `apriori status` reports accurate coverage metrics. (5) Running `init` a second time after code changes correctly detects changed files, updates the structural graph, and populates appropriate work items. (6) Structural parsing processes files at sub-second speed per file; full `init` of a 10,000-file repository completes within 60 seconds. (7) All MCP read tool queries on a graph with up to 10,000 concepts complete in under 500ms at p95.
+Phase 1 is complete when: (1) `apriori init` successfully parses a Python or TypeScript repository and produces a structural knowledge graph with concept nodes and structural edges. (2) The MCP server starts and all Phase 1 tools respond correctly, including semantic search returning relevance-ranked results via vector similarity. (3) The knowledge graph is persisted in both SQLite and YAML, and `rebuild-index` reconstructs SQLite with no data loss. (4) `apriori status` reports accurate coverage metrics. (5) Running `init` a second time after code changes correctly detects changed files, updates the structural graph, and populates appropriate work items. (6) Structural parsing processes files at sub-second speed per file; full `init` of a 10,000-file repository completes within 60 seconds. (7) All MCP read tool queries on a graph with up to 10,000 concepts complete in under 500ms at p95.
 
 ---
 
@@ -501,7 +501,7 @@ for weight_name in metric_weight_map[metric]:
     )
 ```
 
-For blast radius completeness, the modulation is applied differently: rather than boosting a weight factor, the engine directly boosts the priority score of all work items with `item_type == "analyze_impact"` by `(1 + blast_deficit * modulation_strength)`. This is because blast radius completeness doesn't map cleanly to one of the six weight factors — it maps to a work item type.
+For blast radius completeness, the modulation is applied differently: rather than boosting a weight factor, the engine directly boosts the priority score of all work items with `item_type == "analyze_impact"` by `(1 + blast_deficit * modulation_strength)`. This is because blast radius completeness doesn't map cleanly to one of the six weight factors — it maps to a work item type. *(Note: `blast_radius_completeness` deficit calculations and the resulting `analyze_impact` boosting are inactive until Phase 3).*
 
 For escalated items, after computing the modulated priority, multiply by the configured reduction factor (default: 0.5).
 
@@ -653,7 +653,6 @@ Phase 2 is complete when:
 7. The audit UI starts via `apriori ui`, displays the knowledge graph visualization, shows the librarian activity feed, supports the verify/correct/flag review workflow, and displays the health dashboard with accurate metrics and effective weights.
 8. Review outcomes from the audit UI are correctly recorded and the error profile can be queried.
 9. Token budget limits are enforced, with co-regulation cost correctly accounted for when enabled.
-10. The `semantic` mode of the `search` MCP tool returns relevant results via vector similarity.
 
 ---
 

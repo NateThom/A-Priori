@@ -82,7 +82,7 @@ The parsing orchestrator walks the repository file tree respecting include/exclu
 
 The graph builder transforms parse results into concept nodes and structural edges via the storage layer. It must be idempotent — running twice on the same code produces the same graph, upserting by fully-qualified symbol name. Each structural edge has `evidence_type = "structural"` and `confidence = 1.0`.
 
-The change detector integrates with git to identify files changed since the last analysis point (stored as a commit hash). For changed files, it re-parses and updates the structural graph. For concepts with stale content hashes, it generates `verify_concept` work items and applies the `needs-review` label. For new files, it generates `investigate_file` items. For changed structural edges, it generates `analyze_impact` items.
+The change detector integrates with git to identify files changed since the last analysis point (stored as a commit hash). For changed files, it re-parses and updates the structural graph. For concepts with stale content hashes, it generates `verify_concept` work items and applies the `needs-review` label. For new files, it generates `investigate_file` items. *(Deferred to Phase 3)* For changed structural edges, it generates `analyze_impact` items.
 
 **Acceptance Criteria:** `apriori init` on a Python repository produces concept nodes for all top-level and class-level functions/methods, all classes, and all modules, with structural edges for calls, imports, and inheritance. The same works for a TypeScript repository. Parsing processes files at sub-second speed per file. Running `init` a second time after code changes correctly detects the changes, updates the graph, and populates appropriate work items. The graph builder is idempotent.
 
@@ -224,7 +224,7 @@ The metrics engine computes the three core product metrics from ERD §4.6. These
 
 Base priority computation implements the six-factor weighted sum from PRD §6.3. Each factor is computed per work item using data from the storage layer and git.
 
-Adaptive modulation implements the feedback loop from PRD §6.3.1 and ERD §4.3.2. Before each iteration's work item selection, the engine: computes current metric values via the metrics engine, computes deficit for each metric (`max(0, target - current)`), applies modulation to effective weights (`base * (1 + deficit * modulation_strength)`), and for blast radius completeness, directly boosts `analyze_impact` items since this metric doesn't map to a weight factor. For escalated items, the final score is multiplied by the reduction factor (default: 0.5).
+Adaptive modulation implements the feedback loop from PRD §6.3.1 and ERD §4.3.2. Before each iteration's work item selection, the engine: computes current metric values via the metrics engine, computes deficit for each metric (`max(0, target - current)`), applies modulation to effective weights (`base * (1 + deficit * modulation_strength)`), and for blast radius completeness, directly boosts `analyze_impact` items since this metric doesn't map to a weight factor. *(Note: `blast_radius_completeness` modulation is dormant until Epic 12 in Phase 3).* For escalated items, the final score is multiplied by the reduction factor (default: 0.5).
 
 Telemetry output records the metric values, targets, deficits, effective weights, and selected work item per iteration. This data is stored and served to the audit UI's health dashboard.
 
