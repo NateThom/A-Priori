@@ -1,0 +1,210 @@
+"""Configuration system for A-Priori (PRD §2.3; ERD §2.3).
+
+Loads apriori.config.yaml, merges with defaults, validates, and exposes typed Config.
+API keys are never stored in config — referenced by environment variable name only.
+"""
+
+import logging
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Literal, Optional
+
+import yaml
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Default edge type vocabulary
+# ---------------------------------------------------------------------------
+DEFAULT_EDGE_TYPES: frozenset[str] = frozenset(
+    {
+        "defines",
+        "uses",
+        "extends",
+        "implements",
+        "depends_on",
+        "references",
+        "modifies",
+        "calls",
+    }
+)
+
+# Default base priority weights (must sum to 1.0)
+DEFAULT_BASE_PRIORITIES = {
+    "recency": 0.25,
+    "frequency": 0.20,
+    "semantic_relevance": 0.25,
+    "user_interest": 0.15,
+    "code_stability": 0.10,
+    "cross_module_impact": 0.05,
+}
+
+
+# ---------------------------------------------------------------------------
+# Nested Config Models (Pydantic v2)
+# ---------------------------------------------------------------------------
+class LLMConfig(BaseModel):
+    """LLM provider configuration."""
+
+    provider: Literal["anthropic", "ollama"] = "anthropic"
+    api_key_env: str = "ANTHROPIC_API_KEY"
+    model: str = "claude-opus-4-6"
+    base_url: Optional[str] = None  # for Ollama or custom endpoints
+    timeout_seconds: int = 300
+
+    @field_validator("api_key_env")
+    @classmethod
+    def api_key_env_must_not_be_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("api_key_env must not be empty")
+        return v
+
+
+class LibrarianConfig(BaseModel):
+    """Librarian loop configuration."""
+
+    modulation_strength: float = Field(default=0.8, ge=0.0, le=1.0)
+    max_iterations_per_run: int = Field(default=10, ge=1)
+    context_window_tokens: int = Field(default=200000, ge=1000)
+
+
+class QualityCoRegulationConfig(BaseModel):
+    """Co-regulation review configuration."""
+
+    enabled: bool = True
+    min_confidence_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    require_human_review_below: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class QualityConfig(BaseModel):
+    """Quality pipeline configuration."""
+
+    co_regulation: QualityCoRegulationConfig = Field(
+        default_factory=QualityCoRegulationConfig
+    )
+    level1_consistency_checks_enabled: bool = True
+    auto_reject_threshold: float = Field(default=0.3, ge=0.0, le=1.0)
+
+
+class WorkQueueConfig(BaseModel):
+    """Work queue and backlog configuration."""
+
+    retention_days: int = Field(default=30, ge=1)
+    max_backlog_size: int = Field(default=10000, ge=100)
+    priority_recalc_interval_hours: int = Field(default=24, ge=1)
+
+
+class EmbeddingConfig(BaseModel):
+    """Embedding service configuration."""
+
+    model: str = "all-MiniLM-L6-v2"
+    dimensions: int = 384
+    batch_size: int = Field(default=32, ge=1)
+
+
+class StorageConfig(BaseModel):
+    """Storage configuration."""
+
+    sqlite_path: str = "./apriori.db"
+    yaml_backup_path: str = "./apriori_backup.yaml"
+    enable_dual_write: bool = True
+
+
+class Config(BaseModel):
+    """Complete A-Priori configuration."""
+
+    # Core settings
+    project_name: str = "A-Priori"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+
+    # Sub-configurations
+    llm: LLMConfig = Field(default_factory=LLMConfig)
+    librarian: LibrarianConfig = Field(default_factory=LibrarianConfig)
+    quality: QualityConfig = Field(default_factory=QualityConfig)
+    work_queue: WorkQueueConfig = Field(default_factory=WorkQueueConfig)
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
+    storage: StorageConfig = Field(default_factory=StorageConfig)
+
+    # Edge types vocabulary (default + custom)
+    edge_types: set[str] = Field(default_factory=lambda: set(DEFAULT_EDGE_TYPES))
+
+    # Base priority weights
+    base_priority_weights: dict[str, float] = Field(
+        default_factory=lambda: DEFAULT_BASE_PRIORITIES.copy()
+    )
+
+    @model_validator(mode="after")
+    def normalize_priority_weights(self) -> "Config":
+        """Normalize priority weights to sum to 1.0 if they don't already."""
+        weights = self.base_priority_weights
+        total = sum(weights.values())
+
+        if total <= 0:
+            raise ValueError("base_priority_weights must have at least one positive value")
+
+        # If not close to 1.0, normalize and warn
+        if not abs(total - 1.0) < 0.001:
+            logger.warning(
+                f"base_priority_weights sum to {total:.4f}, not 1.0. Normalizing proportionally."
+            )
+            factor = 1.0 / total
+            self.base_priority_weights = {k: v * factor for k, v in weights.items()}
+
+        return self
+
+
+def load_config(path: Optional[Path] = None) -> Config:
+    """Load and validate A-Priori configuration.
+
+    Load apriori.config.yaml (or custom path), merge with defaults, validate,
+    and return a fully-populated typed Config object.
+
+    Args:
+        path: Path to config file. If None, searches for apriori.config.yaml
+              in current working directory. If not found, uses all defaults.
+
+    Returns:
+        Validated Config object with all required fields populated.
+
+    Raises:
+        ValueError: If config file is invalid or required values are missing.
+    """
+
+    # Determine config file path
+    if path is None:
+        default_path = Path.cwd() / "apriori.config.yaml"
+        path = default_path if default_path.exists() else None
+
+    # Load YAML if config file exists
+    user_config_dict = {}
+    if path and path.exists():
+        try:
+            with open(path, "r") as f:
+                loaded = yaml.safe_load(f)
+                if loaded:  # YAML can return None for empty files
+                    user_config_dict = loaded
+            logger.info(f"Loaded configuration from {path}")
+        except yaml.YAMLError as e:
+            raise ValueError(f"Failed to load config from {path}: {e}") from e
+    elif path:
+        logger.info(f"Config file not found at {path}, using defaults")
+    else:
+        logger.info("No config file found, using defaults")
+
+    # Handle edge_types merging: append custom types to defaults
+    if "edge_types" in user_config_dict:
+        custom_types = user_config_dict.pop("edge_types")
+        user_edge_types = set(DEFAULT_EDGE_TYPES) | set(custom_types)
+        user_config_dict["edge_types"] = user_edge_types
+
+    # Merge user config with defaults by creating a default Config and
+    # selectively overriding with user values
+    try:
+        config = Config(**user_config_dict)
+    except Exception as e:
+        raise ValueError(f"Configuration validation failed: {e}") from e
+
+    return config
