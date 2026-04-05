@@ -208,7 +208,6 @@ Every concept node carries a continuously-maintained impact profile that describ
 | `semantic_impact` | list[ImpactEntry] | Nodes with inferred semantic coupling (from Layer 1). Variable confidence. |
 | `historical_impact` | list[ImpactEntry] | Nodes with empirical co-change patterns (from Layer 2). Confidence based on frequency/recency. |
 | `last_computed` | timestamp | When this impact profile was last fully computed |
-| `structural_last_updated` | timestamp | When the structural layer last updated this profile |
 
 Each `ImpactEntry` contains:
 
@@ -260,7 +259,7 @@ When a work item's `failure_count` reaches a configurable threshold (default: 3)
 | `verify_concept` | Change detection (code changed since last analysis) | Concept's referenced code has been modified |
 | `evaluate_relationship` | Semantic-graph disagreement scan | Semantic search suggests a relationship that the graph doesn't have |
 | `reported_gap` | External agent via `report_gap` MCP tool | An agent or human flagged a knowledge gap |
-| `review_concept` | Label trigger | Concept is labeled `needs-review` |
+| `review_concept` | Human action via Audit UI flag | Concept is flagged for re-review by a human reviewer |
 | `analyze_impact` | Structural layer (dependency graph changed) | A concept's structural dependencies changed; impact profile needs recomputation |
 
 ### 5.7 Co-Regulation Assessment (output of Level 1.5 review)
@@ -494,6 +493,8 @@ The success metrics defined in this section serve a dual purpose. They are the p
 **Knowledge freshness** shall be measured as the percentage of concepts whose `last_verified` timestamp is more recent than the last modification time of their referenced code. The target is at least 90% freshness (≥ 0.90) for actively-developed code (files modified in the last 30 days). Concepts that have never been verified (`last_verified` is null) are excluded from the freshness calculation — they are not yet part of the verified knowledge base. Freshness measures how current the verified knowledge is, not how much of the codebase has been verified (which is the coverage metric's concern).
 
 **Blast radius accuracy** shall be measured by comparing A-Priori's predicted impact set for a change against the actual set of files modified in the corresponding pull request (using historical PRs as ground truth). The target is greater than 70% recall (the percentage of actually-affected files that A-Priori predicted) and greater than 50% precision (the percentage of predicted files that were actually affected).
+
+**Blast radius completeness** shall be measured as the percentage of concepts that have a non-stale impact profile (where `last_computed` is within the configurable staleness threshold). The target is at least 70% completeness (≥ 0.70). This metric is distinct from blast radius *accuracy* (recall/precision against actual PR outcomes): completeness measures graph readiness (how many concepts have a computed, non-stale profile), while accuracy measures predictive quality. Blast radius completeness drives the adaptive priority modulation system (§6.3.1) via `blast_radius_completeness_target`.
 
 **Query latency** for all MCP read tools shall be under 500ms for the 95th percentile of queries on a knowledge graph with up to 10,000 concept nodes.
 

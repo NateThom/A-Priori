@@ -278,6 +278,20 @@ CREATE VIRTUAL TABLE concepts_fts USING fts5(
     name, description, content='concepts', content_rowid='rowid'
 );
 
+-- Triggers to keep the FTS5 index synchronized with the concepts table
+CREATE TRIGGER concepts_ai AFTER INSERT ON concepts BEGIN
+    INSERT INTO concepts_fts(rowid, name, description) VALUES (new.rowid, new.name, new.description);
+END;
+
+CREATE TRIGGER concepts_ad AFTER DELETE ON concepts BEGIN
+    INSERT INTO concepts_fts(concepts_fts, rowid, name, description) VALUES ('delete', old.rowid, old.name, old.description);
+END;
+
+CREATE TRIGGER concepts_au AFTER UPDATE ON concepts BEGIN
+    INSERT INTO concepts_fts(concepts_fts, rowid, name, description) VALUES ('delete', old.rowid, old.name, old.description);
+    INSERT INTO concepts_fts(rowid, name, description) VALUES (new.rowid, new.name, new.description);
+END;
+
 -- Dimensions: 768 per S-2 decision (e5-base-v2 via sentence-transformers)
 CREATE VIRTUAL TABLE concept_embeddings USING vec0(
     concept_id TEXT PRIMARY KEY,
@@ -405,7 +419,7 @@ The graph builder must be idempotent: running it twice on the same codebase prod
 
 #### 3.3.3 Change Detector (`structural/change_detector.py`)
 
-Integrates with git to detect code changes and populate the work queue. On invocation: (1) Determine changed files since last known analysis point (stored as git hash in config state; on first run, all files are "changed"). (2) Re-run structural parser and graph builder on changed files. (3) For each concept whose code references have mismatched content hashes, generate a `verify_concept` work item and add `needs-review` label. (4) For each new file, generate an `investigate_file` work item. (5) *(Deferred to Phase 3)* For each concept whose structural edges changed, generate an `analyze_impact` work item. (6) Update stored analysis point to current HEAD.
+Integrates with git to detect code changes and populate the work queue. On invocation: (1) Determine changed files since last known analysis point (stored as git hash in config state; on first run, all files are "changed"). (2) Re-run structural parser and graph builder on changed files. (3) For each concept whose code references have mismatched content hashes, generate a `verify_concept` work item and add `needs-review` label. (4) For each new file, generate an `investigate_file` work item. (5) *(Deferred to Phase 3)* For each concept whose structural edges changed, instantly recompute its structural impact profile. (6) Update stored analysis point to current HEAD.
 
 Uses `git diff --name-only {last_hash}..HEAD` or equivalent. Must not re-parse unchanged files.
 
@@ -474,7 +488,8 @@ A single iteration follows this exact sequence, updated from PRD §6.2:
 7. **Level 1: Automated consistency check.** Run the output through `quality/level1.py`. If it fails: write a FailureRecord to the work item (with `failure_reason` identifying the specific check), increment `failure_count`, check if escalation threshold is reached (if so, escalate), and exit.
 8. **Level 1.5: Co-regulation review (if enabled).** Run the output through `quality/level15.py`, which makes a second LLM call. If it fails: write a FailureRecord with the co-regulation assessment's dimensional scores and feedback, increment `failure_count`, check for escalation, and exit.
 9. **Integrate knowledge.** Pass the validated output to the Knowledge Manager (§4.5) for graph integration.
-10. **Mark resolved.** Mark the work item as resolved with a timestamp and exit.
+10. **Mark resolved.** Mark the work item as resolved with a timestamp.
+11. **Log activity.** Write a summary record to the `librarian_activity` table capturing: the work item processed, pass/fail/escalated status, model used, tokens consumed, co-regulation scores (if applicable), mutation counts (concepts created/updated, edges created/updated), and failure feedback (if applicable). This record powers the audit UI activity feed (§4.7.2, Story 11.4).
 
 Each iteration is isolated. No state is carried between iterations except through the knowledge graph and work queue on disk.
 
@@ -704,11 +719,11 @@ Phase 3 delivers the impact profile data model, three-layer impact computation, 
 
 **Semantic impact:** BFS traversal of semantic edges (`depends-on`, `implements`, `shares-assumption-about`, `extends`, `supersedes`). `relates-to` and `owned-by` are intentionally excluded — `relates-to` is a weak generic association that would generate false positives, and `owned-by` is organizational metadata rather than a functional dependency. Confidence is the product of edge confidences along the path (degrades with each hop). Depends on the semantic layer being populated. Profiles with no semantic data must be flagged as "structural only."
 
-**Historical impact:** Analyze git log for commits touching the target concept's files. For co-occurring files, compute confidence proportional to co-change frequency with recency decay. Should be batched rather than per-concept.
+**Historical impact:** Analyze git log for commits touching the target concept's files. For co-occurring files, compute confidence proportional to co-change frequency with recency decay. Should be batched rather than per-concept. The computation must persist `co-changes-with` edges into the KnowledgeStore (via the Edge table) so that the ImpactProfile's `relationship_path` can resolve correctly. Each `co-changes-with` edge records the computed confidence and is updated on each batch recomputation.
 
 ### 5.2 Impact Profile Maintenance
 
-Pre-computed and stored on each concept node. Updated: structurally (immediately when change detector runs and structural edges change), semantically (as a side effect of librarian iterations that discover new relationships), historically (periodically, **triggered automatically during the initialization phase of librarian runs**). Stale profiles generate `analyze_impact` work items.
+Pre-computed and stored on each concept node. Updated: structurally (immediately when change detector runs and structural edges change), semantically (as a side effect of librarian iterations that discover new relationships), historically (periodically, **triggered automatically during the initialization phase of librarian runs**). Stale profiles generate `analyze_impact` work items. **The staleness scan runs automatically during the librarian orchestrator's initialization phase (pre-run hook):** it queries all concepts whose `impact_profile.last_computed` is older than the configurable staleness threshold and generates an `analyze_impact` work item for each.
 
 ### 5.3 Blast Radius MCP Tool
 

@@ -279,10 +279,11 @@ Each story below follows this structure:
 - Given multiple threads reading concurrently, when the store is accessed, then no locking errors occur (WAL mode enables concurrent reads).
 - Given work items in various states (resolved, unresolved, escalated), when `get_work_item_stats` is called, then it returns aggregate counts (total, resolved, unresolved, escalated) and queue depth.
 - Given resolved work items older than a configured retention period, when `delete_old_work_items(days)` is called, then resolved work items (and their failure records) older than the specified number of days are deleted and the count of deleted items is returned.
+- Given an unresolved WorkItem, when `resolve_work_item` is called, then `resolved` is set to True, `resolved_at` is stamped, and the item is returned.
 
 **Technical Notes:** The `failure_records` column is `TEXT NOT NULL DEFAULT '[]'` storing a JSON array. The index for work items must be created on `base_priority_score DESC`, not `priority_score`.
 
-**Definition of Done:** All work item operations working (create, record_failure, escalate, get_escalated_items, get_work_item_stats, delete_old_work_items). Edge referential integrity enforced. Unit tests for work item lifecycle, retention cleanup, and concurrent access.
+**Definition of Done:** All work item operations working (create, resolve_work_item, record_failure, escalate, get_escalated_items, get_work_item_stats, delete_old_work_items). Edge referential integrity enforced. Unit tests for work item lifecycle, retention cleanup, and concurrent access.
 
 **Intra-epic dependencies:** Story 2.3a (schema and connection management must exist).
 
@@ -556,7 +557,7 @@ Each story below follows this structure:
 - Given a modified function whose concept exists in the graph, when the change detector runs, then a `verify_concept` work item is created and the `needs-review` label is applied to the concept.
 - Given a newly added file, when the change detector runs, then an `investigate_file` work item is created for each new file.
 - Given a deleted function whose concept exists in the graph, when the change detector runs, then the concept is flagged (not immediately deleted — the knowledge manager handles cleanup).
-- Given structural edges have changed (e.g., a new import was added), when the change detector runs, then structural updates proceed *without* generating impact tasks in Phase 1 (impact task generation is deferred to Phase 3).
+- Given structural edges have changed (e.g., a new import was added), when the change detector runs, then structural updates proceed (instant impact profile recomputation is deferred to Phase 3).
 - Given the change detector runs successfully, when it completes, then the stored last-analyzed commit hash is updated to HEAD.
 
 **Technical Notes:** Uses `git diff --name-only {last_hash}..HEAD` to identify changed files. For the first run (no last hash), all files are "changed." The detector must not re-parse unchanged files — only pass changed file paths to the parsing orchestrator. Content hash comparison (`CodeReference.content_hash`) is used to detect whether a concept's referenced code has actually changed.
@@ -873,14 +874,15 @@ Each story below follows this structure:
 
 - Given a librarian output with an empty description, when Level 1 runs, then it fails with `failure_reason = "Level 1: empty description"`.
 - Given a librarian output matching a boilerplate pattern ("this module handles data processing"), when Level 1 runs, then it fails with a message identifying the generic description.
-- Given a librarian output asserting a relationship to a concept name that doesn't exist in the graph, when Level 1 runs, then it fails with a referential integrity error.
+- Given a librarian output asserting a relationship to a concept name that doesn't exist in the graph **and is not being created in the same batch**, when Level 1 runs, then it fails with a referential integrity error.
+- Given a librarian output that creates two new concepts and an edge between them in the same batch, when Level 1 runs, then the referential integrity check **passes** because both concepts are present in the current iteration's batch.
 - Given a librarian output with `confidence = 1.5`, when Level 1 runs, then it fails with a confidence range error.
 - Given a librarian output that cannot be parsed into the expected Pydantic models, when Level 1 runs, then it fails with a schema validity error including the Pydantic validation message.
 - Given a librarian output using edge type "invented-type", when Level 1 runs, then it fails with an invalid edge type error.
 - Given a librarian output asserting a `depends-on` relationship with no structural corroboration (no import/call/type-reference between the entities), when Level 1 runs, then it **passes** but the confidence score is reduced by the configured factor (default: 0.2) and a metadata note is attached.
 - Given a known-good fixture, when Level 1 runs, then it passes.
 
-**Technical Notes:** The boilerplate pattern check should use a short list of banned patterns plus a minimum character length (50 characters). The structural corroboration check (item 6) is a soft check — it adjusts confidence but does not reject. Keep the banned pattern list small and specific to avoid false positives.
+**Technical Notes:** The boilerplate pattern check should use a short list of banned patterns plus a minimum character length (50 characters). The structural corroboration check (item 6) is a soft check — it adjusts confidence but does not reject. Keep the banned pattern list small and specific to avoid false positives. The referential integrity check must validate edge targets against both the existing graph and the set of concepts being created in the current iteration's batch (per PRD §6.4.1 and ERD §4.4.1).
 
 **Definition of Done:** All six checks implemented. Tested against all fixtures from Story 7.2. Execution time under 10ms per check. FailureRecord produced on rejection with specific failure_reason.
 
@@ -1027,7 +1029,7 @@ Each story below follows this structure:
 - Given 50 concepts referencing actively-developed files and 45 with `last_verified` more recent than the code's last modification, when `get_freshness` is called, then it returns 0.90.
 - Given 100 concepts and 70 with non-stale impact profiles, when `get_blast_radius_completeness` is called, then it returns 0.70.
 - Given a 10,000-concept graph, when any metric is computed, then execution time is under 50ms.
-- Given metrics were computed 10 seconds ago and no writes have occurred, when metrics are requested again, then cached values are returned (30-second TTL cache).
+- Given metrics were computed 10 seconds ago, when metrics are requested again, then cached values are returned regardless of intervening writes (simple 30-second TTL cache).
 
 **Technical Notes:** "Actively-developed files" for freshness means files modified in the last 30 days (configurable). "Total source files" for coverage uses the same glob patterns as the structural parser. These should be single SQL queries with appropriate JOINs, not Python-side iteration.
 
@@ -1106,7 +1108,9 @@ Each story below follows this structure:
 - Given a work item with previous failure records, when it is selected for retry, then the prompt includes the failure history and co-regulation feedback from previous attempts.
 - Given an empty work queue, when the loop starts, then it logs "No unresolved work items. Nothing to do." and exits cleanly.
 - Given each iteration, when it completes, then no state is carried to the next iteration (context is loaded fresh from disk).
+- Given an iteration that completes (whether pass, fail, or escalation), when the iteration ends, then a record is written to the `librarian_activity` table capturing the work item processed, status, model, tokens used, co-regulation scores, mutation counts, and any failure feedback.
 - Given the start of a `librarian run`, when the orchestrator initializes, then it invokes a pluggable pre-run hook (no-op in Phase 2; Phase 3 registers the historical impact batch computation via Story 12.4).
+- Given the LLM adapter is now available, when a code reference's symbol and hash both fail to match, then the semantic anchor fallback path correctly invokes the LLM to search the file and returns the updated code reference.
 - Given resolved work items older than the configured retention policy, when the librarian loop initializes, then those items and their failure records are deleted from the database.
 
 **Technical Notes:** Per S-1, the loop orchestrator is an async function managing iterations via `asyncio.gather()` for concurrency within a single run. Each iteration is isolated. The adapter's `analyze` call is the async boundary. Everything else (storage reads/writes, quality checks) uses sync methods called from the thread pool. Queue selection optimization: The loop should query SQLite for the top N unresolved work items ordered by `base_priority_score`, then apply the adaptive modulation (Epic 9) in-memory to those N items, and select the one with the highest effective score. This avoids running a full-table `UPDATE` on every iteration.
@@ -1130,6 +1134,7 @@ Each story below follows this structure:
 - Given the Anthropic prompt template, when used with Claude, then the output is structured JSON with concepts, relationships, and labels.
 - Given the Ollama prompt template, when used with a local model, then the output schema is the same but the prompt is adapted for models that may need more explicit JSON formatting instructions.
 - Given the output schema, when the LLM returns JSON (or JSON in markdown fences), then the response parser can extract it correctly.
+- Given an LLM response that is not valid JSON or JSON-in-markdown-fences (e.g., plain text with embedded data), when the response parser processes it, then it degrades gracefully to text extraction rather than raising an unhandled parse error, per ERD §4.2.2.
 
 **Technical Notes:** The output schema instructs the LLM to return: `{"concepts": [{"name": str, "description": str, "confidence": float, "code_references": [...]}], "relationships": [{"source": str, "target": str, "edge_type": str, "confidence": float, "rationale": str}], "labels": [...]}`. The `with_failure_context` mode appends the failure history section to the base prompt. Different `item_type` values may need different prompt templates (investigation vs. verification vs. relationship evaluation).
 
@@ -1411,6 +1416,7 @@ Each story below follows this structure:
 - Given two files that were modified together in 8 out of 10 recent commits, when historical impact is computed, then they appear with high confidence reflecting co-change frequency.
 - Given co-change analysis, when recency decay is applied, then recent co-changes contribute more to confidence than older ones.
 - Given the computation, when it runs, then it processes git history in batch (not per-concept) for efficiency.
+- Given two files with a detected co-change pattern, when historical impact computation completes, then `co-changes-with` Edge entities are created (or updated) in the KnowledgeStore with the computed confidence score.
 
 **Technical Notes:** Confidence formula: `co_change_count / total_changes * recency_weight`. Recency decay can be exponential or linear over a configurable window (e.g., last 90 days). Batch processing: analyze the git log once and update all affected profiles.
 
@@ -1430,7 +1436,7 @@ Each story below follows this structure:
 
 - Given a structural edge change (new import added), when the change detector runs, then the affected concept's structural impact profile is recomputed immediately.
 - Given the librarian discovers a new semantic relationship, when integration completes, then both endpoint concepts' impact profiles are updated.
-- Given a profile whose `last_computed` is older than the staleness threshold, when detected, then an `analyze_impact` work item is generated.
+- Given a profile whose `last_computed` is older than the staleness threshold, when detected during the librarian orchestrator's pre-run hook, then an `analyze_impact` work item is generated.
 - Given a blast radius query, when the profile is returned, then it includes the `last_computed` timestamp so the consumer knows how fresh the data is.
 
 **Definition of Done:** Impact profiles stored on concepts. Structural updates immediate. Semantic updates on librarian integration. Staleness detection generating work items.
@@ -1551,6 +1557,26 @@ Each story below follows this structure:
 **Definition of Done:** All six documentation deliverables written. Quick-start guide validated by someone who hasn't used the system before. Reviewed for accuracy against the implemented system.
 
 **Intra-epic dependencies:** Stories 13.1 and 13.2 (documentation must reflect final behavior).
+
+---
+
+#### Story 13.4: Agent Efficiency Measurement Baseline *(Informational Milestone)*
+
+**As a** project stakeholder, **I want** lightweight instrumentation that measures exploratory tool-call volume with and without the knowledge graph **so that** we have empirical data to inform the PRD §9.3 efficiency target as adoption grows.
+
+**Context:** PRD §9.3 sets an aspirational target of ≥30% reduction in exploratory tool calls. Because the actual reduction depends heavily on graph maturity, codebase characteristics, and task mix, this story establishes the measurement infrastructure and captures an initial baseline rather than gating on a hard pass/fail threshold. The 30% target should be revisited once real-world usage data is available.
+
+**Acceptance Criteria:**
+
+- Given a small benchmark suite (≥2 representative codebases), when an agent performs a set of predefined tasks with and without the knowledge graph, then tool-call counts are recorded for both conditions.
+- Given the recorded counts, when the comparison is computed, then a report is produced showing: total tool calls per condition, per-task breakdown, and percentage reduction.
+- Given the report, when the results are reviewed, then they are treated as an informational baseline — not a release gate.
+
+**Technical Notes:** Keep the harness minimal — a script that replays a fixed task list and counts tool invocations is sufficient. "Exploratory tool calls" are defined as tool invocations that request information already captured in the knowledge graph. Pin model versions and seeds where possible for reproducibility, but perfect determinism is not required at this stage. This milestone is expected to be re-run periodically post-MVP as the graph matures and the benchmark suite expands.
+
+**Definition of Done:** Measurement script exists and is documented. At least one baseline run completed. Results shared with the team. No pass/fail gate — the output informs future iteration on the 30% target.
+
+**Intra-epic dependencies:** Story 13.1 (requires a populated knowledge graph to test against), Epics 4 and 10 (MCP tools and librarian must be functional).
 
 ---
 

@@ -384,7 +384,7 @@ Phase 4:
 | 1 | Data Models & Configuration | 1 | None | — | Small |
 | 2 | Storage Layer | 1 | Epic 1 | S-5 | Large |
 | 3 | Structural Engine | 1 | Epic 2 | S-3 | Medium-Large |
-| 4 | MCP Server | 1 | Epic 2, 3 | — | Small-Medium |
+| 4 | MCP Server | 1 | Epic 2 | — | Small-Medium |
 | 5 | CLI & First-Run | 1 | Epic 2, 3, 4 | — | Small |
 | 6 | LLM Adapter Layer | 2 | Epic 1 | — | Medium |
 | 7 | Quality Assurance Pipeline | 2 | Epic 6, 2 | S-8 | Large |
