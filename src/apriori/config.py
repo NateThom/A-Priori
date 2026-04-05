@@ -21,14 +21,21 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 DEFAULT_EDGE_TYPES: frozenset[str] = frozenset(
     {
-        "defines",
-        "uses",
-        "extends",
-        "implements",
-        "depends_on",
-        "references",
-        "modifies",
+        # Structural: derived deterministically from AST analysis (Layer 0)
         "calls",
+        "imports",
+        "inherits",
+        "type-references",
+        # Semantic: derived by librarian agents via LLM analysis (Layer 1)
+        "depends-on",
+        "implements",
+        "relates-to",
+        "shares-assumption-about",
+        "extends",
+        "supersedes",
+        "owned-by",
+        # Historical: derived from git history analysis (Layer 2)
+        "co-changes-with",
     }
 )
 
