@@ -1,0 +1,31 @@
+  Listing pipeline agents: 
+  
+  ps aux | grep "[c]laude -p" | awk '{print $2, $9, $10}'
+  
+  Shows PID, start time, and CPU time. The [c] trick avoids matching the grep process itself.                                     
+                                                                                                                                  
+  Seeing which ticket an agent is working on:                                                                                     
+                                                                                                                                  
+  ps -p <PID> -o args= | head -c 300                                                                                              
+                                                                                                                                  
+  The ticket number and title are in the first few hundred characters of the prompt.                                              
+                                                                                                                                  
+  Watching pipeline orchestrator logs:                                                                                            
+                                                                                                                                  
+  tail -f /private/tmp/claude-501/-Users-nthom-Development-A-Priori/380bac9f-979a-4fcf-8e7f-939c29358011/tasks/bdmveiu9c.output   
+                                                                                                                                  
+  That's the story pipeline's output file from this session. For persistent logs across sessions:                                 
+                                                                                                                                  
+  ls ~/.kantban/pipelines/89836111-5121-4ec5-8113-38933e6a91ed/logs/                                                              
+                                                                                                                                  
+  Reading an agent's live output:                                                                                                 
+                                                                                                                                  
+  Each claude -p process writes to stdout/stderr which the orchestrator captures. The orchestrator logs show spawn/complete/stall 
+  events but not the agent's internal messages. To see those, check the ticket's comments on the board — agents write progress    
+  comments as they work.                                                                                                          
+                                                                                                                                 
+  Quick status one-liner:
+
+  ps aux | grep "[c]laude -p" | wc -l
+                                                                                                                                  
+  Shows how many pipeline agents are currently running.
