@@ -1,6 +1,6 @@
 default:
   - name: test
-    run: "uv run pytest --tb=short -q"
+    run: "/opt/homebrew/bin/uv run pytest --tb=short -q"
     required: true
     timeout: 120s
 
@@ -15,7 +15,7 @@ columns:
     extend: true
     gates:
       - name: test-full
-        run: "uv run pytest --tb=short"
+        run: "/opt/homebrew/bin/uv run pytest --tb=short"
         required: true
         timeout: 120s
 
