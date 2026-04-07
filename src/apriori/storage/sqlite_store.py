@@ -24,6 +24,7 @@ from typing import Any, Optional
 
 import sqlite_vec
 
+from apriori.embedding.protocol import EmbeddingServiceProtocol
 from apriori.models.concept import Concept, CodeReference
 from apriori.models.edge import Edge
 from apriori.models.impact import ImpactEntry, ImpactProfile
@@ -119,6 +120,31 @@ CREATE VIRTUAL TABLE IF NOT EXISTS concepts_fts USING fts5(
 );
 """
 
+# FTS5 sync triggers — defined separately because trigger bodies contain
+# semicolons that would break the simple split(";") DDL executor.
+_FTS5_TRIGGERS = [
+    """
+    CREATE TRIGGER IF NOT EXISTS concepts_ai AFTER INSERT ON concepts BEGIN
+        INSERT INTO concepts_fts(rowid, id, name, description)
+        VALUES (new.rowid, new.id, new.name, new.description);
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS concepts_ad AFTER DELETE ON concepts BEGIN
+        INSERT INTO concepts_fts(concepts_fts, rowid, id, name, description)
+        VALUES ('delete', old.rowid, old.id, old.name, old.description);
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS concepts_au AFTER UPDATE ON concepts BEGIN
+        INSERT INTO concepts_fts(concepts_fts, rowid, id, name, description)
+        VALUES ('delete', old.rowid, old.id, old.name, old.description);
+        INSERT INTO concepts_fts(rowid, id, name, description)
+        VALUES (new.rowid, new.id, new.name, new.description);
+    END
+    """,
+]
+
 
 # ---------------------------------------------------------------------------
 # SQLiteStore
@@ -137,8 +163,13 @@ class SQLiteStore:
         concept = store.create_concept(Concept(name="foo", ...))
     """
 
-    def __init__(self, db_path: Path) -> None:
+    def __init__(
+        self,
+        db_path: Path,
+        embedding_service: Optional[EmbeddingServiceProtocol] = None,
+    ) -> None:
         self._db_path = db_path
+        self._embedding_service = embedding_service
         self._local = threading.local()
         # Initialize schema on the calling thread's connection
         conn = self._get_connection()
@@ -162,7 +193,7 @@ class SQLiteStore:
         return self._local.conn
 
     def _init_schema(self, conn: sqlite3.Connection) -> None:
-        """Create all tables, indexes, and virtual tables if they don't exist."""
+        """Create all tables, indexes, virtual tables, and triggers if they don't exist."""
         # Execute DDL statements individually (executescript resets auto-commit)
         cursor = conn.cursor()
         for statement in _DDL.strip().split(";"):
@@ -181,12 +212,48 @@ class SQLiteStore:
             """
         )
         conn.commit()
+        # FTS5 sync triggers (defined separately to avoid semicolon-split issues)
+        for trigger_sql in _FTS5_TRIGGERS:
+            cursor.execute(trigger_sql)
+        conn.commit()
 
     def _execute_scalar(self, sql: str, params: tuple = ()) -> Any:
         """Execute a scalar query and return the single value."""
         conn = self._get_connection()
         row = conn.execute(sql, params).fetchone()
         return row[0] if row else None
+
+    def _upsert_embedding(self, concept_id: uuid.UUID, text: str) -> None:
+        """Generate an embedding for text and upsert it into concept_embeddings.
+
+        vec0 does not support INSERT OR REPLACE, so we DELETE then INSERT.
+        No-op if no embedding_service is configured.
+        """
+        if self._embedding_service is None:
+            return
+        vector = self._embedding_service.generate_embedding(text, text_type="passage")
+        serialized = sqlite_vec.serialize_float32(vector)
+        conn = self._get_connection()
+        # Delete existing entry (if any) before re-inserting — vec0 does not
+        # support INSERT OR REPLACE / ON CONFLICT clauses.
+        conn.execute(
+            "DELETE FROM concept_embeddings WHERE concept_id = ?",
+            (str(concept_id),),
+        )
+        conn.execute(
+            "INSERT INTO concept_embeddings(concept_id, embedding) VALUES (?, ?)",
+            (str(concept_id), serialized),
+        )
+        conn.commit()
+
+    def _delete_embedding(self, concept_id: uuid.UUID) -> None:
+        """Remove the embedding for a concept from concept_embeddings."""
+        conn = self._get_connection()
+        conn.execute(
+            "DELETE FROM concept_embeddings WHERE concept_id = ?",
+            (str(concept_id),),
+        )
+        conn.commit()
 
     # -----------------------------------------------------------------------
     # Serialisation helpers
@@ -367,6 +434,7 @@ class SQLiteStore:
             self._concept_to_row(concept),
         )
         conn.commit()
+        self._upsert_embedding(concept.id, concept.description)
         return concept
 
     def get_concept(self, concept_id: uuid.UUID) -> Optional[Concept]:
@@ -398,6 +466,7 @@ class SQLiteStore:
             row[1:] + (row[0],),  # all fields except id, then id for WHERE
         )
         conn.commit()
+        self._upsert_embedding(concept.id, concept.description)
         return concept
 
     def delete_concept(self, concept_id: uuid.UUID) -> None:
@@ -408,6 +477,7 @@ class SQLiteStore:
         ).fetchone()
         if not existing:
             raise KeyError(f"Concept {concept_id} not found")
+        self._delete_embedding(concept_id)
         conn.execute("DELETE FROM concepts WHERE id = ?", (str(concept_id),))
         conn.commit()
 
@@ -706,11 +776,28 @@ class SQLiteStore:
     def search_semantic(
         self, query_embedding: list[float], limit: int = 10
     ) -> list[Concept]:
-        """Vector search via sqlite-vec (Story 2.5 will fully implement this)."""
-        # Basic implementation: return up to `limit` concepts until Story 2.5
+        """Vector similarity search via sqlite-vec cosine distance.
+
+        Returns up to ``limit`` Concepts ranked by cosine similarity
+        (most similar first). Requires embeddings to have been stored via
+        create_concept or update_concept with an embedding_service configured.
+        """
+        serialized = sqlite_vec.serialize_float32(query_embedding)
         conn = self._get_connection()
         rows = conn.execute(
-            "SELECT * FROM concepts LIMIT ?", (limit,)
+            """
+            SELECT c.*
+            FROM concepts c
+            INNER JOIN (
+                SELECT concept_id,
+                       vec_distance_cosine(embedding, ?) AS distance
+                FROM concept_embeddings
+                ORDER BY distance ASC
+                LIMIT ?
+            ) AS ranked ON c.id = ranked.concept_id
+            ORDER BY ranked.distance ASC
+            """,
+            (serialized, limit),
         ).fetchall()
         return [self._row_to_concept(r) for r in rows]
 
@@ -822,7 +909,16 @@ class SQLiteStore:
     # -----------------------------------------------------------------------
 
     def rebuild_index(self) -> None:
-        """Rebuild the FTS5 content table (vec0 rebuild deferred to Story 2.5)."""
+        """Rebuild the FTS5 content table from the concepts table.
+
+        Also re-generates all concept embeddings if an embedding_service is
+        configured, ensuring the vec0 index reflects current concept descriptions.
+        """
         conn = self._get_connection()
         conn.execute("INSERT INTO concepts_fts(concepts_fts) VALUES('rebuild')")
         conn.commit()
+        if self._embedding_service is not None:
+            rows = conn.execute("SELECT id, description FROM concepts").fetchall()
+            for row in rows:
+                concept_id = uuid.UUID(row["id"])
+                self._upsert_embedding(concept_id, row["description"])
