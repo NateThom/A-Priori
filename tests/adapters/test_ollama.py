@@ -339,3 +339,104 @@ class TestOllamaAdapterTokenCountAndModelInfo:
 
         call_args = mock_client.post.call_args
         assert "http://remote:11434" in call_args[0][0]
+
+
+# ---------------------------------------------------------------------------
+# AC-114-2: LLMConfig-based constructor (uniform construction from config)
+# ---------------------------------------------------------------------------
+class TestOllamaAdapterLLMConfigConstructor:
+    """OllamaAdapter must accept an LLMConfig object as its first argument."""
+
+    def test_constructs_from_llm_config(self):
+        """Given an LLMConfig with provider='ollama', OllamaAdapter(config) succeeds."""
+        from apriori.config import LLMConfig
+        config = LLMConfig(
+            provider="ollama",
+            model="llama3",
+            base_url="http://localhost:11434",
+        )
+        adapter = OllamaAdapter(config)
+        info = adapter.get_model_info()
+        assert info.model_name == "llama3"
+        assert info.provider == "ollama"
+
+    def test_llm_config_base_url_is_used(self):
+        """Given LLMConfig with custom base_url, the adapter uses that URL."""
+        from apriori.config import LLMConfig
+        config = LLMConfig(
+            provider="ollama",
+            model="mistral:7b",
+            base_url="http://192.168.1.50:11434",
+        )
+        adapter = OllamaAdapter(config)
+        # Inspect internal state to verify URL was extracted from config
+        assert "192.168.1.50" in adapter._base_url
+
+    def test_llm_config_model_is_used(self):
+        """Given LLMConfig with model='llama3', the adapter uses that model."""
+        from apriori.config import LLMConfig
+        config = LLMConfig(
+            provider="ollama",
+            model="llama3",
+            base_url="http://localhost:11434",
+        )
+        adapter = OllamaAdapter(config)
+        assert adapter._model == "llama3"
+
+    def test_backward_compat_string_constructor_still_works(self):
+        """Given OllamaAdapter(model='llama3'), backward-compat still works."""
+        adapter = OllamaAdapter(model="llama3")
+        assert adapter._model == "llama3"
+
+    def test_backward_compat_with_custom_base_url(self):
+        """Given OllamaAdapter(model=..., base_url=...), backward-compat still works."""
+        adapter = OllamaAdapter(model="llama3", base_url="http://custom:11434")
+        assert "custom" in adapter._base_url
+
+
+# ---------------------------------------------------------------------------
+# AC-114-3: Prompt/context ordering — context first (Ollama already does this,
+#            verify it matches the new Anthropic behavior)
+# ---------------------------------------------------------------------------
+class TestOllamaAdapterPromptOrdering:
+    """OllamaAdapter.analyze must send context-first: f'{context}\\n\\n{prompt}'."""
+
+    async def test_context_sent_before_prompt(self):
+        """Given prompt and context, when analyze is called,
+        then the request prompt is context + newlines + prompt.
+        """
+        mock_client = _make_mock_client({
+            "model": "llama3",
+            "response": "result",
+            "done": True,
+            "prompt_eval_count": 10,
+            "eval_count": 5,
+        })
+        patcher = _patch_client(mock_client)
+        try:
+            adapter = OllamaAdapter(model="llama3")
+            await adapter.analyze("Explain this", "def f(): pass")
+        finally:
+            patcher.stop()
+
+        call_kwargs = mock_client.post.call_args[1]
+        sent_prompt = call_kwargs["json"]["prompt"]
+        assert sent_prompt == "def f(): pass\n\nExplain this"
+
+    async def test_empty_context_sends_only_prompt(self):
+        """Given empty context, when analyze is called, then only the prompt is sent."""
+        mock_client = _make_mock_client({
+            "model": "llama3",
+            "response": "result",
+            "done": True,
+        })
+        patcher = _patch_client(mock_client)
+        try:
+            adapter = OllamaAdapter(model="llama3")
+            await adapter.analyze("Explain this", "")
+        finally:
+            patcher.stop()
+
+        call_kwargs = mock_client.post.call_args[1]
+        sent_prompt = call_kwargs["json"]["prompt"]
+        assert sent_prompt == "Explain this"
