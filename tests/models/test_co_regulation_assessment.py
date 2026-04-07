@@ -98,3 +98,62 @@ class TestSerializationRoundTrip:
         reconstructed = CoRegulationAssessment(**data)
         assert reconstructed == original
         assert reconstructed.composite_pass is True
+
+
+class TestFeedbackField:
+    """AC: Given a CoRegulationAssessment that fails (composite_pass is False),
+    When the assessment is created,
+    Then it must have a feedback: str field containing the reviewer's guidance
+    (defaults to empty string).
+    """
+
+    def test_feedback_defaults_to_empty_string(self):
+        # Given a failing assessment with no feedback provided
+        assessment = CoRegulationAssessment(
+            specificity=0.3,
+            structural_corroboration=0.7,
+            completeness=0.7,
+        )
+        # Then feedback defaults to empty string
+        assert assessment.feedback == ""
+
+    def test_feedback_accepts_actionable_guidance(self):
+        guidance = "The concept description lacks specificity. Focus on public API surface only."
+        assessment = CoRegulationAssessment(
+            specificity=0.3,
+            structural_corroboration=0.7,
+            completeness=0.7,
+            feedback=guidance,
+        )
+        assert assessment.feedback == guidance
+
+    def test_feedback_on_passing_assessment_can_be_empty(self):
+        # On pass, feedback may be empty or contain minor notes
+        assessment = CoRegulationAssessment(
+            specificity=0.7,
+            structural_corroboration=0.7,
+            completeness=0.7,
+        )
+        assert assessment.composite_pass is True
+        assert assessment.feedback == ""
+
+    def test_feedback_on_passing_assessment_accepts_minor_notes(self):
+        assessment = CoRegulationAssessment(
+            specificity=0.7,
+            structural_corroboration=0.7,
+            completeness=0.7,
+            feedback="Minor: consider tightening the summary sentence.",
+        )
+        assert assessment.composite_pass is True
+        assert assessment.feedback == "Minor: consider tightening the summary sentence."
+
+    def test_feedback_survives_json_round_trip(self):
+        guidance = "Improve structural corroboration by citing more code references."
+        original = CoRegulationAssessment(
+            specificity=0.3,
+            structural_corroboration=0.2,
+            completeness=0.7,
+            feedback=guidance,
+        )
+        restored = CoRegulationAssessment.model_validate_json(original.model_dump_json())
+        assert restored.feedback == guidance
