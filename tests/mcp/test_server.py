@@ -106,11 +106,16 @@ def test_server_has_main_module():
 # ---------------------------------------------------------------------------
 
 
-def test_server_registers_exactly_13_tools():
-    """Given the server, when tools are listed, exactly 13 tools are registered."""
+def test_server_registers_expected_tool_count():
+    """Given the server, when tools are listed, the expected number are registered.
+
+    AP-68 scaffolded 13 tools. AP-70 added 5 read tools (search, traverse,
+    get_concept→replaced, list_edge_types, get_status, blast_radius) for a
+    total of 18.
+    """
     tools = asyncio.run(mcp.list_tools())
-    assert len(tools) == 13, (
-        f"Expected 13 tools, got {len(tools)}: {[t.name for t in tools]}"
+    assert len(tools) == 18, (
+        f"Expected 18 tools, got {len(tools)}: {[t.name for t in tools]}"
     )
 
 
@@ -139,9 +144,9 @@ def test_tool_names_are_unique():
 
 
 def test_expected_tool_names_present():
-    """The 13 expected tool names are all registered."""
+    """All expected tool names are registered (AP-68 + AP-70 additions)."""
     expected = {
-        # Concept CRUD
+        # Concept CRUD (AP-68 scaffold; bodies in AP-70/AP-73)
         "create_concept",
         "get_concept",
         "update_concept",
@@ -153,10 +158,16 @@ def test_expected_tool_names_present():
         "delete_edge",
         "list_edges",
         "get_neighbors",
-        # Search & metrics
+        # Search & metrics (AP-68 scaffold)
         "search_semantic",
         "search_keyword",
         "get_metrics",
+        # Read tools added by AP-70
+        "search",
+        "traverse",
+        "list_edge_types",
+        "get_status",
+        "blast_radius",
     }
     tools = asyncio.run(mcp.list_tools())
     actual = {t.name for t in tools}
