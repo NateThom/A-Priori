@@ -459,7 +459,9 @@ Phase 2 delivers Layer 1 (Semantic Enrichment), Layer 2 (Knowledge Management), 
 
 #### 4.1.1 Adapter Protocol (`adapters/base.py`)
 
-Protocol for LLM adapters. The interface must support: `async analyze(prompt: str, context: dict) -> AnalysisResult` (send prompt, return parsed result; handles retries, rate limiting, and provider-specific errors internally), `get_token_count(text: str) -> int` (estimate token count for budget management), `get_model_info() -> ModelInfo` (metadata about model name, context window, cost per token for telemetry).
+Protocol for LLM adapters. The interface must support: `async analyze(prompt: str, context: str) -> AnalysisResult` (send prompt and pre-formatted context string, return parsed result; handles retries, rate limiting, and provider-specific errors internally), `get_token_count(text: str) -> int` (estimate token count for budget management), `get_model_info() -> ModelInfo` (metadata about model name, context window, cost per token for telemetry).
+
+**Note on `context` parameter type (resolved in AP-115):** The ERD originally specified `context: dict` with the intent that adapters would format provider-specific payloads. The implementation uses `context: str` — callers pre-format context before passing to the adapter, and adapters concatenate it with the prompt as `f"{context}\n\n{prompt}"`. The `str` approach is the correct design: it keeps adapters thin (arch:adapter-pattern), avoids defining a dict schema that would couple adapters to upstream domain objects, and matches the arch:sync-first principle of preferring simple, flat interfaces. E7 and E10 implementers should pass a pre-formatted string containing the relevant context (code, structural concepts, failure feedback) concatenated by the caller.
 
 The adapter must return the model name as a string in the response metadata — this value is written into failure records so that retry attempts can be distinguished from the original.
 
