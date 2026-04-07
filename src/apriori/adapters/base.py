@@ -39,17 +39,20 @@ class AnalysisResult(BaseModel):
 
 
 class ModelInfo(BaseModel):
-    """Metadata about the LLM model backing an adapter.
+    """Metadata about the LLM model backing an adapter (ERD §3.1.6).
 
     Fields:
-        model_name: Model identifier as used by the provider API.
+        name: Model identifier as used by the provider API.
         provider: Provider name (e.g. "anthropic", "ollama").
-        context_window: Maximum token context supported, if known.
+        context_window: Maximum token context supported by this model.
+        cost_per_token: Cost in USD per token (input token price). Use 0.0 for
+            local/free inference engines such as Ollama.
     """
 
-    model_name: str
+    name: str
     provider: str
-    context_window: int | None = None
+    context_window: int
+    cost_per_token: float
 
 
 @runtime_checkable

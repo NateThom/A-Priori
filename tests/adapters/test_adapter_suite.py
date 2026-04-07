@@ -250,7 +250,7 @@ class TestModelNameInResult:
         assert len(result.model_name) > 0
 
     def test_get_model_info_returns_configured_model_name(self, adapter_name: str) -> None:
-        """get_model_info().model_name matches the model passed at construction."""
+        """get_model_info().name matches the model passed at construction (ERD §3.1.6)."""
         if adapter_name == "anthropic":
             with patch("anthropic.AsyncAnthropic"), patch.dict(
                 "os.environ", {"ANTHROPIC_API_KEY": "test-key"}
@@ -262,7 +262,7 @@ class TestModelNameInResult:
             expected_model = "llama3"
 
         info = adapter.get_model_info()
-        assert info.model_name == expected_model
+        assert info.name == expected_model
 
     def test_get_model_info_provider_is_correct(self, adapter_name: str) -> None:
         """get_model_info().provider matches the adapter's provider name."""

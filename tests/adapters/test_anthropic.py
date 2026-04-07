@@ -316,7 +316,7 @@ class TestAnthropicAdapterModelInfo:
         info = adapter.get_model_info()
 
         assert isinstance(info, ModelInfo)
-        assert info.model_name == "claude-opus-4-6"
+        assert info.name == "claude-opus-4-6"
         assert info.provider == "anthropic"
 
     def test_get_model_info_context_window_is_positive(self, monkeypatch):
@@ -330,7 +330,10 @@ class TestAnthropicAdapterModelInfo:
         assert info.context_window is not None
         assert info.context_window > 0
 
-    def test_get_model_info_model_name_reflects_config(self, monkeypatch):
+    def test_get_model_info_name_reflects_config(self, monkeypatch):
+        # Given: ERD §3.1.6 specifies field name as 'name' not 'model_name'
+        # When: get_model_info() is called on an AnthropicAdapter
+        # Then: info.name resolves to the configured model string without AttributeError
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
         with patch("anthropic.AsyncAnthropic"):
             from apriori.adapters.anthropic import AnthropicAdapter
@@ -338,7 +341,21 @@ class TestAnthropicAdapterModelInfo:
 
         info = adapter.get_model_info()
 
-        assert info.model_name == "claude-3-5-sonnet-20241022"
+        assert info.name == "claude-3-5-sonnet-20241022"
+
+    def test_get_model_info_has_cost_per_token(self, monkeypatch):
+        # Given: ERD §3.1.6 requires cost_per_token: float
+        # When: get_model_info() is called on an AnthropicAdapter
+        # Then: cost_per_token is a positive float (Anthropic charges per token)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        with patch("anthropic.AsyncAnthropic"):
+            from apriori.adapters.anthropic import AnthropicAdapter
+            adapter = AnthropicAdapter(_make_llm_config())
+
+        info = adapter.get_model_info()
+
+        assert isinstance(info.cost_per_token, float)
+        assert info.cost_per_token > 0.0
 
 
 # ---------------------------------------------------------------------------

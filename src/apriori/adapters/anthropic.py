@@ -23,6 +23,20 @@ _RETRY_DELAYS: tuple[float, ...] = (1.0, 2.0, 4.0)
 # Characters per token heuristic used by get_token_count.
 _CHARS_PER_TOKEN = 4
 
+# Input token cost in USD per token by model prefix (ERD §3.1.6, §4.3.2).
+# Prices sourced from Anthropic pricing page. Unknown models fall back to _DEFAULT_COST.
+_MODEL_COST_PER_TOKEN: dict[str, float] = {
+    "claude-opus-4": 0.000015,         # $15 / 1M input tokens
+    "claude-3-opus": 0.000015,          # $15 / 1M input tokens
+    "claude-sonnet-4": 0.000003,        # $3 / 1M input tokens
+    "claude-3-5-sonnet": 0.000003,      # $3 / 1M input tokens
+    "claude-3-sonnet": 0.000003,        # $3 / 1M input tokens
+    "claude-haiku-4": 0.0000008,        # $0.80 / 1M input tokens
+    "claude-3-5-haiku": 0.0000008,      # $0.80 / 1M input tokens
+    "claude-3-haiku": 0.00000025,       # $0.25 / 1M input tokens
+}
+_DEFAULT_COST_PER_TOKEN: float = 0.000003  # fall back to Sonnet pricing
+
 
 class AnthropicAdapter:
     """LLMAdapter implementation backed by the Anthropic Messages API.
@@ -76,8 +90,13 @@ class AnthropicAdapter:
 
     def get_model_info(self) -> ModelInfo:
         """Return metadata about the configured model."""
+        cost = next(
+            (v for k, v in _MODEL_COST_PER_TOKEN.items() if self._model.startswith(k)),
+            _DEFAULT_COST_PER_TOKEN,
+        )
         return ModelInfo(
-            model_name=self._model,
+            name=self._model,
             provider="anthropic",
             context_window=200_000,
+            cost_per_token=cost,
         )
