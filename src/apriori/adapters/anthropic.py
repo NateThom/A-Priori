@@ -47,10 +47,11 @@ class AnthropicAdapter:
 
         for attempt in range(len(_RETRY_DELAYS) + 1):  # up to 4 total attempts
             try:
+                full_content = f"{context}\n\n{prompt}" if context else prompt
                 message = await self._client.messages.create(
                     model=self._model,
                     max_tokens=4096,
-                    messages=[{"role": "user", "content": f"{prompt}\n\n{context}"}],
+                    messages=[{"role": "user", "content": full_content}],
                 )
                 content = message.content[0].text
                 tokens_used = message.usage.input_tokens + message.usage.output_tokens

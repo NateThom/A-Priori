@@ -11,6 +11,8 @@ Error handling:
 
 from __future__ import annotations
 
+from typing import Union
+
 import httpx
 
 from apriori.adapters.base import AnalysisResult, ModelInfo
@@ -27,18 +29,32 @@ class OllamaModelError(RuntimeError):
 class OllamaAdapter:
     """LLM adapter for the Ollama HTTP API.
 
-    Args:
-        model: Ollama model name (e.g. "llama3", "mistral:7b").
-        base_url: Base URL for the Ollama API. Defaults to http://localhost:11434.
+    Accepts either an LLMConfig object or raw keyword args for backward compatibility:
+        OllamaAdapter(config)                          # preferred
+        OllamaAdapter(model="llama3")                  # backward compat
+        OllamaAdapter(model="llama3", base_url="...")  # backward compat
     """
 
     def __init__(
         self,
-        model: str,
+        config_or_model: Union["LLMConfig", str, None] = None,  # type: ignore[name-defined]
+        *,
+        model: str = "",
         base_url: str = "http://localhost:11434",
     ) -> None:
-        self._model = model
-        self._base_url = base_url.rstrip("/")
+        from apriori.config import LLMConfig
+
+        if isinstance(config_or_model, LLMConfig):
+            self._model = config_or_model.model
+            self._base_url = (config_or_model.base_url or base_url).rstrip("/")
+        elif isinstance(config_or_model, str):
+            # backward compat: OllamaAdapter("llama3") positional string
+            self._model = config_or_model
+            self._base_url = base_url.rstrip("/")
+        else:
+            # backward compat: OllamaAdapter(model="llama3")
+            self._model = model
+            self._base_url = base_url.rstrip("/")
 
     async def analyze(self, prompt: str, context: str) -> AnalysisResult:
         """Send prompt + context to Ollama and return the analysis result.

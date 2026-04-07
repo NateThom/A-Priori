@@ -339,3 +339,63 @@ class TestAnthropicAdapterModelInfo:
         info = adapter.get_model_info()
 
         assert info.model_name == "claude-3-5-sonnet-20241022"
+
+
+# ---------------------------------------------------------------------------
+# AC-114-1: AnthropicAdapter public API export
+# ---------------------------------------------------------------------------
+class TestAnthropicAdapterPublicExport:
+    """AnthropicAdapter must be importable from apriori.adapters (not just the submodule)."""
+
+    def test_anthropic_adapter_importable_from_package(self):
+        """Given adapters package, when AnthropicAdapter is imported from it,
+        then the import succeeds without referencing apriori.adapters.anthropic directly.
+        """
+        from apriori.adapters import AnthropicAdapter  # noqa: F401
+        assert AnthropicAdapter is not None
+
+    def test_anthropic_adapter_in_all(self):
+        """AnthropicAdapter must appear in apriori.adapters.__all__."""
+        import apriori.adapters as pkg
+        assert "AnthropicAdapter" in pkg.__all__
+
+
+# ---------------------------------------------------------------------------
+# AC-114-3: Prompt/context ordering — context first
+# ---------------------------------------------------------------------------
+class TestAnthropicAdapterPromptOrdering:
+    """AnthropicAdapter.analyze must send context-first: f'{context}\\n\\n{prompt}'."""
+
+    async def test_context_sent_before_prompt(self, monkeypatch):
+        """Given prompt and context, when analyze is called,
+        then the API message content is context + newlines + prompt.
+        """
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        mock_msg = _make_mock_message()
+
+        with patch("anthropic.AsyncAnthropic") as mock_cls:
+            mock_create = AsyncMock(return_value=mock_msg)
+            mock_cls.return_value.messages.create = mock_create
+            from apriori.adapters.anthropic import AnthropicAdapter
+            adapter = AnthropicAdapter(_make_llm_config())
+            await adapter.analyze("Explain this", "def f(): pass")
+
+        call_kwargs = mock_create.call_args[1]
+        sent_content = call_kwargs["messages"][0]["content"]
+        assert sent_content == "def f(): pass\n\nExplain this"
+
+    async def test_empty_context_sends_only_prompt(self, monkeypatch):
+        """Given empty context, when analyze is called, then only the prompt is sent."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        mock_msg = _make_mock_message()
+
+        with patch("anthropic.AsyncAnthropic") as mock_cls:
+            mock_create = AsyncMock(return_value=mock_msg)
+            mock_cls.return_value.messages.create = mock_create
+            from apriori.adapters.anthropic import AnthropicAdapter
+            adapter = AnthropicAdapter(_make_llm_config())
+            await adapter.analyze("Explain this", "")
+
+        call_kwargs = mock_create.call_args[1]
+        sent_content = call_kwargs["messages"][0]["content"]
+        assert sent_content == "Explain this"
