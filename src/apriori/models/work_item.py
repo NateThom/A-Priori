@@ -1,7 +1,7 @@
 """WorkItem and FailureRecord models (PRD §5.6; ERD §3.1.4, §3.1.5)."""
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -53,6 +53,10 @@ class WorkItem(BaseModel):
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
     item_type: _ItemType
     concept_id: uuid.UUID
+    description: str
+    file_path: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    resolved_at: Optional[datetime] = None
     failure_count: int = 0
     failure_records: list[FailureRecord] = Field(default_factory=list)
     escalated: bool = False
