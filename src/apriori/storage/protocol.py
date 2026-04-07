@@ -340,6 +340,33 @@ class KnowledgeStore(Protocol):
         """
         ...
 
+    def get_work_item_stats(self) -> dict[str, int]:
+        """Return aggregate counts for work items grouped by state.
+
+        Returns:
+            A dict with integer counts for the following keys:
+            - ``total``: all work items
+            - ``pending``: unresolved work items (``resolved=False``)
+            - ``resolved``: resolved work items (``resolved=True``)
+            - ``escalated``: escalated work items (``escalated=True``)
+        """
+        ...
+
+    def delete_old_work_items(self, days: int) -> int:
+        """Delete resolved WorkItems whose resolved_at is older than ``days`` days.
+
+        Only resolved items are eligible for deletion. Unresolved items are
+        never deleted by this method regardless of age.
+
+        Args:
+            days: Retention period in days. Items with ``resolved_at`` older
+                than ``days`` days ago are permanently deleted.
+
+        Returns:
+            The number of work items deleted.
+        """
+        ...
+
     # -------------------------------------------------------------------------
     # Review Outcome operations
     # -------------------------------------------------------------------------

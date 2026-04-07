@@ -18,7 +18,7 @@ import json
 import sqlite3
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS work_items (
 CREATE INDEX IF NOT EXISTS idx_work_items_concept ON work_items(concept_id);
 CREATE INDEX IF NOT EXISTS idx_work_items_resolved ON work_items(resolved);
 CREATE INDEX IF NOT EXISTS idx_work_items_escalated ON work_items(escalated);
+CREATE INDEX IF NOT EXISTS idx_work_items_priority ON work_items(base_priority_score DESC);
 
 CREATE TABLE IF NOT EXISTS review_outcomes (
     id                  TEXT PRIMARY KEY,
@@ -295,7 +296,7 @@ class SQLiteStore:
             SQLiteStore._dt_to_iso(wi.created_at),
             SQLiteStore._dt_to_iso(wi.resolved_at),
             wi.failure_count,
-            json.dumps([r.model_dump() for r in wi.failure_records]),
+            json.dumps([r.model_dump(mode="json") for r in wi.failure_records]),
             int(wi.escalated),
             int(wi.resolved),
             wi.base_priority_score,
@@ -424,7 +425,8 @@ class SQLiteStore:
     # -----------------------------------------------------------------------
 
     def create_edge(self, edge: Edge) -> Edge:
-        """Persist a new Edge. Raises ValueError on duplicate (source, target, type)."""
+        """Persist a new Edge. Raises ValueError on duplicate (source, target, type).
+        Raises KeyError if source_id or target_id references a non-existent Concept."""
         conn = self._get_connection()
         try:
             conn.execute(
@@ -438,9 +440,15 @@ class SQLiteStore:
             )
             conn.commit()
         except sqlite3.IntegrityError as exc:
-            if "UNIQUE" in str(exc):
+            exc_str = str(exc)
+            if "UNIQUE" in exc_str:
                 raise ValueError(
                     f"Edge ({edge.source_id}, {edge.target_id}, {edge.edge_type}) already exists"
+                ) from exc
+            if "FOREIGN KEY" in exc_str:
+                raise KeyError(
+                    f"Edge references non-existent concept: source={edge.source_id}, "
+                    f"target={edge.target_id}"
                 ) from exc
             raise
         return edge
@@ -613,6 +621,48 @@ class SQLiteStore:
             "SELECT * FROM work_items WHERE escalated = 1"
         ).fetchall()
         return [self._row_to_work_item(r) for r in rows]
+
+    def get_work_item_stats(self) -> dict[str, int]:
+        """Return aggregate counts for work items by state.
+
+        Returns a dict with keys: total, pending, resolved, escalated.
+        """
+        conn = self._get_connection()
+        total = conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0]
+        pending = conn.execute(
+            "SELECT COUNT(*) FROM work_items WHERE resolved = 0"
+        ).fetchone()[0]
+        resolved = conn.execute(
+            "SELECT COUNT(*) FROM work_items WHERE resolved = 1"
+        ).fetchone()[0]
+        escalated = conn.execute(
+            "SELECT COUNT(*) FROM work_items WHERE escalated = 1"
+        ).fetchone()[0]
+        return {
+            "total": total,
+            "pending": pending,
+            "resolved": resolved,
+            "escalated": escalated,
+        }
+
+    def delete_old_work_items(self, days: int) -> int:
+        """Delete resolved WorkItems whose resolved_at is older than `days` days.
+
+        Args:
+            days: Retention period in days. Resolved items with resolved_at
+                older than this many days ago are permanently deleted.
+
+        Returns:
+            The number of work items deleted.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        conn = self._get_connection()
+        cursor = conn.execute(
+            "DELETE FROM work_items WHERE resolved = 1 AND resolved_at < ?",
+            (self._dt_to_iso(cutoff),),
+        )
+        conn.commit()
+        return cursor.rowcount
 
     # -----------------------------------------------------------------------
     # Review Outcome operations
