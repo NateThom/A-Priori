@@ -26,7 +26,7 @@ These can be scheduled as first-stories within their parent epics. The epic can 
 | S-4 | Blast Radius Validation | not-started | Phase 3: Blast Radius | 2-3 | — |
 | S-5 | YAML Performance at Scale | not-started | Storage Layer | 2-3 | — |
 | S-7 | Audit UI Technology | not-started | Audit UI | 4-6 | — |
-| S-8 | Co-Regulation Prompt Design | not-started | Quality Pipeline | 3-4 | — |
+| S-8 | Co-Regulation Prompt Design | done | Quality Pipeline | 3-4 | [S-8-co-regulation-prompt-design.md](./S-8-co-regulation-prompt-design.md) |
 
 ---
 
@@ -64,6 +64,7 @@ These can be scheduled as first-stories within their parent epics. The epic can 
 **Question:** FastAPI + htmx? FastAPI + React SPA? Flask? What's the right stack for a local-only audit UI?
 **Why it doesn't block definition:** The audit UI epic can be defined in terms of capabilities (graph explorer, librarian monitor, review workflow). Technology selection is the first implementation decision.
 
-### S-8: Co-Regulation Prompt Design
+### S-8: Co-Regulation Prompt Design (DONE)
 **Question:** Can an LLM-as-judge prompt reliably discriminate between good and bad librarian output? What does the prompt look like? What are the failure modes?
 **Why it doesn't block definition:** The quality pipeline epic is defined in terms of the three-level system. Prompt design is the first implementation task.
+**Decision:** Adversarial framing with embedded rubric anchors. Tested against 3 known-good and 3 known-bad librarian outputs. Adversarial prompt: 100% good pass rate, 100% bad reject rate. Confirmatory prompt: 100% good pass, 33% bad reject (fails threshold). See [decision record](./S-8-co-regulation-prompt-design.md).
