@@ -1,0 +1,34 @@
+{
+  "metadata": {
+    "fixture_id": "good_02_database_pool_with_code_ref",
+    "description": "DatabaseConnectionPool concept with a code reference pointing to the SQLite store implementation. Tests that code_references field is handled correctly. All Level 1 checks pass.",
+    "expected_result": "pass",
+    "checks_that_pass": [
+      "schema_parseable",
+      "description_non_empty",
+      "description_non_generic",
+      "confidence_in_range",
+      "edge_type_valid",
+      "referential_integrity"
+    ],
+    "checks_that_fail": []
+  },
+  "librarian_output": {
+    "concepts": [
+      {
+        "name": "SQLiteKnowledgeStore",
+        "description": "Manages a SQLite database connection for the knowledge graph, providing thread-safe access via a per-call connection factory. Implements the KnowledgeStore protocol and handles all DDL via versioned migrations applied at construction time. Writes to concepts, edges, and work_items tables using parameterised SQL to prevent injection, and exposes dual-write coordination hooks used by DualWriter.",
+        "confidence": 0.84,
+        "code_references": [
+          {
+            "symbol": "SQLiteStore",
+            "file_path": "src/apriori/storage/sqlite_store.py",
+            "line_range": [1, 50],
+            "semantic_anchor": "class SQLiteStore implements KnowledgeStore protocol"
+          }
+        ]
+      }
+    ],
+    "edges": []
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "fixture_id": "bad_04_generic_description_02",
+    "description": "Another generic boilerplate description: a function that 'processes data and returns results' — no domain specifics, no behavior, no dependencies mentioned. Fails the description_non_generic Level 1 check.",
+    "expected_result": "fail",
+    "checks_that_pass": [
+      "schema_parseable",
+      "description_non_empty",
+      "confidence_in_range",
+      "edge_type_valid",
+      "referential_integrity"
+    ],
+    "checks_that_fail": [
+      "description_non_generic"
+    ]
+  },
+  "librarian_output": {
+    "concepts": [
+      {
+        "name": "DataTransformer",
+        "description": "A utility function that processes data and returns results. It takes input, performs some operations, and outputs the transformed data.",
+        "confidence": 0.48,
+        "code_references": []
+      }
+    ],
+    "edges": []
+  }
+}

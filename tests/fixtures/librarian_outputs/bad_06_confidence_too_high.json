@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "fixture_id": "bad_06_confidence_too_high",
+    "description": "Concept with confidence = 1.5, which exceeds the valid [0.0, 1.0] range. The schema parses successfully (LibrarianOutput does not enforce confidence range) but the Level 1 check catches it. Fails the confidence_in_range Level 1 check.",
+    "expected_result": "fail",
+    "checks_that_pass": [
+      "schema_parseable",
+      "description_non_empty",
+      "description_non_generic",
+      "edge_type_valid",
+      "referential_integrity"
+    ],
+    "checks_that_fail": [
+      "confidence_in_range"
+    ]
+  },
+  "librarian_output": {
+    "concepts": [
+      {
+        "name": "TokenVerifier",
+        "description": "Validates Supabase-issued JWT tokens by decoding the payload with jose, checking the exp claim against the current UTC timestamp, and verifying the signature against the SUPABASE_JWT_SECRET. Returns the decoded user sub claim on success.",
+        "confidence": 1.5,
+        "code_references": []
+      }
+    ],
+    "edges": []
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "metadata": {
+    "fixture_id": "bad_09_invalid_edge_type",
+    "description": "Edge uses 'knows-about' as the edge type, which is not in the valid edge type vocabulary (valid semantic types: depends-on, implements, relates-to, shares-assumption-about, extends, supersedes, owned-by). Fails the edge_type_valid Level 1 check.",
+    "expected_result": "fail",
+    "checks_that_pass": [
+      "schema_parseable",
+      "description_non_empty",
+      "description_non_generic",
+      "confidence_in_range",
+      "referential_integrity"
+    ],
+    "checks_that_fail": [
+      "edge_type_valid"
+    ]
+  },
+  "librarian_output": {
+    "concepts": [
+      {
+        "name": "EmbeddingService",
+        "description": "Generates dense vector representations for concept descriptions and code semantic anchors using the intfloat/e5-base-v2 sentence-transformers model (768 dimensions). Batches input texts in groups of 32 for efficiency and normalises output vectors to unit length before storage in the sqlite-vec index.",
+        "confidence": 0.86,
+        "code_references": []
+      },
+      {
+        "name": "VectorIndex",
+        "description": "Maintains a sqlite-vec virtual table that stores 768-dimensional float32 embeddings keyed by concept UUID. Exposes an approximate nearest-neighbour search accepting a query vector and a top-k parameter, returning concept IDs ordered by cosine similarity.",
+        "confidence": 0.83,
+        "code_references": []
+      }
+    ],
+    "edges": [
+      {
+        "source_name": "EmbeddingService",
+        "target_name": "VectorIndex",
+        "edge_type": "knows-about",
+        "confidence": 0.78,
+        "evidence_type": "semantic"
+      }
+    ]
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "metadata": {
+    "fixture_id": "good_01_auth_service",
+    "description": "Single well-formed AuthService concept with a specific, substantive description. No edges. All Level 1 checks pass.",
+    "expected_result": "pass",
+    "checks_that_pass": [
+      "schema_parseable",
+      "description_non_empty",
+      "description_non_generic",
+      "confidence_in_range",
+      "edge_type_valid",
+      "referential_integrity"
+    ],
+    "checks_that_fail": []
+  },
+  "librarian_output": {
+    "concepts": [
+      {
+        "name": "AuthService",
+        "description": "Verifies JWT tokens against the SUPABASE_JWT_SECRET environment variable using the jose library, implementing a Fastify preHandler hook that attaches the decoded user context to each request. Returns 401 for expired or invalid tokens, and supports a service-role bypass path for server-side operations that authenticate via the Supabase service key.",
+        "confidence": 0.89,
+        "code_references": []
+      }
+    ],
+    "edges": []
+  }
+}

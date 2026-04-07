@@ -1,0 +1,17 @@
+{
+  "metadata": {
+    "fixture_id": "bad_08_unparseable_schema",
+    "description": "The LLM returned raw prose instead of a structured LibrarianOutput object. The librarian_output field is a plain string, which cannot be parsed as LibrarianOutput. Fails the schema_parseable Level 1 check.",
+    "expected_result": "fail",
+    "checks_that_pass": [],
+    "checks_that_fail": [
+      "schema_parseable",
+      "description_non_empty",
+      "description_non_generic",
+      "confidence_in_range",
+      "edge_type_valid",
+      "referential_integrity"
+    ]
+  },
+  "librarian_output": "The AuthService class is responsible for handling user authentication. It verifies JWT tokens and manages session state. The class depends on the TokenVerifier for signature validation and uses the UserRepository to look up user profiles. I believe the confidence for this analysis is about 0.85."
+}

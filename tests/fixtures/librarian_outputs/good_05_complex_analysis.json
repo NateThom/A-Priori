@@ -1,0 +1,75 @@
+{
+  "metadata": {
+    "fixture_id": "good_05_complex_analysis",
+    "description": "Complex multi-concept analysis with three concepts and three edges across different edge types (depends-on, implements, relates-to). All concept and edge references resolve. All Level 1 checks pass.",
+    "expected_result": "pass",
+    "checks_that_pass": [
+      "schema_parseable",
+      "description_non_empty",
+      "description_non_generic",
+      "confidence_in_range",
+      "edge_type_valid",
+      "referential_integrity"
+    ],
+    "checks_that_fail": []
+  },
+  "librarian_output": {
+    "concepts": [
+      {
+        "name": "PriorityEngine",
+        "description": "Calculates a composite priority score for each work item in the librarian queue by weighting six dimensions: recency (0.25), semantic relevance (0.25), frequency (0.20), user interest (0.15), code stability (0.10), and cross-module impact (0.05). Weights are user-configurable via apriori.config.yaml and are normalised to sum to 1.0 at load time.",
+        "confidence": 0.88,
+        "code_references": [
+          {
+            "symbol": "PriorityEngine",
+            "file_path": "src/apriori/maintenance/priority.py",
+            "line_range": [1, 80],
+            "semantic_anchor": "class PriorityEngine computes weighted priority scores"
+          }
+        ]
+      },
+      {
+        "name": "WorkItemBacklog",
+        "description": "Maintains the ordered queue of pending librarian work items in the SQLite work_items table. Supports insertion, resolution, escalation, and priority-ordered retrieval. Implements a configurable max_backlog_size limit (default 10,000) beyond which the lowest-priority items are evicted to prevent unbounded growth.",
+        "confidence": 0.82,
+        "code_references": [
+          {
+            "symbol": "WorkItemBacklog",
+            "file_path": "src/apriori/maintenance/backlog.py",
+            "line_range": [1, 60],
+            "semantic_anchor": "class WorkItemBacklog manages the librarian work queue"
+          }
+        ]
+      },
+      {
+        "name": "LibrarianOrchestrator",
+        "description": "Drives the Ralph-Wiggum loop: on each iteration it reads the current system state from disk, asks the WorkItemBacklog for the highest-priority unresolved item, constructs the LLM prompt with relevant context, sends it to the configured LLM adapter, passes the response through the quality pipeline, and integrates approved output into the knowledge graph via IntegrationDecisionTree.",
+        "confidence": 0.79,
+        "code_references": []
+      }
+    ],
+    "edges": [
+      {
+        "source_name": "LibrarianOrchestrator",
+        "target_name": "WorkItemBacklog",
+        "edge_type": "depends-on",
+        "confidence": 0.87,
+        "evidence_type": "semantic"
+      },
+      {
+        "source_name": "LibrarianOrchestrator",
+        "target_name": "PriorityEngine",
+        "edge_type": "depends-on",
+        "confidence": 0.83,
+        "evidence_type": "semantic"
+      },
+      {
+        "source_name": "WorkItemBacklog",
+        "target_name": "PriorityEngine",
+        "edge_type": "relates-to",
+        "confidence": 0.71,
+        "evidence_type": "semantic"
+      }
+    ]
+  }
+}

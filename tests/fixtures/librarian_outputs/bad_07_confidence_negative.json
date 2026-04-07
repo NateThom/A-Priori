@@ -1,0 +1,42 @@
+{
+  "metadata": {
+    "fixture_id": "bad_07_confidence_negative",
+    "description": "Edge with confidence = -0.1, which is below the valid [0.0, 1.0] range. The schema parses successfully but the Level 1 check catches the negative value. Fails the confidence_in_range Level 1 check.",
+    "expected_result": "fail",
+    "checks_that_pass": [
+      "schema_parseable",
+      "description_non_empty",
+      "description_non_generic",
+      "edge_type_valid",
+      "referential_integrity"
+    ],
+    "checks_that_fail": [
+      "confidence_in_range"
+    ]
+  },
+  "librarian_output": {
+    "concepts": [
+      {
+        "name": "SessionManager",
+        "description": "Persists authenticated user sessions in an in-memory store keyed by session ID, exposing get, set, and invalidate operations. Session entries expire after a configurable TTL (default 30 minutes) enforced by a background sweep that runs every five minutes.",
+        "confidence": 0.73,
+        "code_references": []
+      },
+      {
+        "name": "CookieHandler",
+        "description": "Reads and writes the __session cookie on HTTP responses, setting Secure, HttpOnly, and SameSite=Lax attributes for all production environments. Extracts the session ID for lookup in the SessionManager on each authenticated request.",
+        "confidence": 0.69,
+        "code_references": []
+      }
+    ],
+    "edges": [
+      {
+        "source_name": "CookieHandler",
+        "target_name": "SessionManager",
+        "edge_type": "depends-on",
+        "confidence": -0.1,
+        "evidence_type": "semantic"
+      }
+    ]
+  }
+}

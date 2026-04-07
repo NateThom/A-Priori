@@ -1,0 +1,48 @@
+{
+  "metadata": {
+    "fixture_id": "good_03_multi_concept_with_edges",
+    "description": "Two concepts (AuthController and AuthService) with a semantic edge between them. Referential integrity satisfied because both edge endpoints exist in the concepts list. All Level 1 checks pass.",
+    "expected_result": "pass",
+    "checks_that_pass": [
+      "schema_parseable",
+      "description_non_empty",
+      "description_non_generic",
+      "confidence_in_range",
+      "edge_type_valid",
+      "referential_integrity"
+    ],
+    "checks_that_fail": []
+  },
+  "librarian_output": {
+    "concepts": [
+      {
+        "name": "AuthController",
+        "description": "Exposes the /auth/callback HTTP endpoint that handles the OAuth2 redirect from Supabase, exchanges the authorization code for a session, upserts the user profile row in Supabase, and enqueues a welcome email job via the BullMQ send-welcome-email queue.",
+        "confidence": 0.81,
+        "code_references": [
+          {
+            "symbol": "authCallbackPlugin",
+            "file_path": "apps/api/src/plugins/auth-callback.ts",
+            "line_range": null,
+            "semantic_anchor": "POST /auth/callback Fastify plugin"
+          }
+        ]
+      },
+      {
+        "name": "AuthService",
+        "description": "Verifies JWT tokens against the SUPABASE_JWT_SECRET environment variable using the jose library, implementing a Fastify preHandler hook that attaches the decoded user context to each request. Returns 401 for expired or invalid tokens, and supports a service-role bypass path for server-side operations that authenticate via the Supabase service key.",
+        "confidence": 0.89,
+        "code_references": []
+      }
+    ],
+    "edges": [
+      {
+        "source_name": "AuthController",
+        "target_name": "AuthService",
+        "edge_type": "depends-on",
+        "confidence": 0.85,
+        "evidence_type": "semantic"
+      }
+    ]
+  }
+}
