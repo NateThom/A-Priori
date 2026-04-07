@@ -1,7 +1,9 @@
 """ReviewOutcome — a human reviewer's action from the Level 2 audit UI (ERD §3.1.7)."""
+import uuid
+from datetime import datetime, timezone
 from typing import Literal, Optional
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 VALID_ERROR_TYPES = frozenset({
     "description_wrong",
@@ -18,10 +20,15 @@ class ReviewOutcome(BaseModel):
     Conditional validation:
     - ``action == "corrected"`` → ``error_type`` is required and must be a known type.
     - ``action == "verified"`` → ``error_type`` must be absent (None).
+    - ``action == "flagged"`` → ``error_type`` must be absent (None).
     """
 
-    action: Literal["corrected", "verified"]
+    concept_id: uuid.UUID
+    reviewer: str
+    action: Literal["corrected", "verified", "flagged"]
     error_type: Optional[str] = None
+    correction_details: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @model_validator(mode="after")
     def validate_error_type_consistency(self) -> "ReviewOutcome":
@@ -33,7 +40,9 @@ class ReviewOutcome(BaseModel):
                     f"error_type '{self.error_type}' is not valid; "
                     f"must be one of {sorted(VALID_ERROR_TYPES)}"
                 )
-        elif self.action == "verified":
+        elif self.action in ("verified", "flagged"):
             if self.error_type is not None:
-                raise ValueError("error_type must not be set when action is 'verified'")
+                raise ValueError(
+                    f"error_type must not be set when action is '{self.action}'"
+                )
         return self
