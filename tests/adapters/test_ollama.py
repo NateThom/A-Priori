@@ -310,18 +310,37 @@ class TestOllamaAdapterTokenCountAndModelInfo:
         assert isinstance(info, ModelInfo)
         assert info.provider == "ollama"
 
-    def test_get_model_info_model_name_matches_init(self):
-        """get_model_info returns model_name matching the model passed at init."""
+    def test_get_model_info_name_matches_init(self):
+        # Given: ERD §3.1.6 specifies field name as 'name' not 'model_name'
+        # When: get_model_info() is called on an OllamaAdapter
+        # Then: info.name resolves to the model string without AttributeError
         adapter = OllamaAdapter(model="mistral:7b")
         info = adapter.get_model_info()
-        assert info.model_name == "mistral:7b"
+        assert info.name == "mistral:7b"
+
+    def test_get_model_info_cost_per_token_is_zero(self):
+        # Given: Ollama is a local/free inference engine (ERD §3.1.6)
+        # When: get_model_info() is called on an OllamaAdapter
+        # Then: cost_per_token is 0.0 (no cost for local inference)
+        adapter = OllamaAdapter(model="llama3")
+        info = adapter.get_model_info()
+        assert info.cost_per_token == 0.0
+
+    def test_get_model_info_context_window_is_int(self):
+        # Given: ERD §3.1.6 requires context_window: int (not optional)
+        # When: get_model_info() is called on an OllamaAdapter
+        # Then: context_window is an int (not None)
+        adapter = OllamaAdapter(model="llama3")
+        info = adapter.get_model_info()
+        assert isinstance(info.context_window, int)
+        assert info.context_window > 0
 
     def test_custom_base_url(self):
         """OllamaAdapter accepts a custom base_url."""
         adapter = OllamaAdapter(model="llama3", base_url="http://192.168.1.100:11434")
         # If model info is correct, init succeeded
         info = adapter.get_model_info()
-        assert info.model_name == "llama3"
+        assert info.name == "llama3"
 
     async def test_analyze_uses_custom_base_url(self):
         """Given a custom base_url, analyze POSTs to that URL."""
@@ -357,7 +376,7 @@ class TestOllamaAdapterLLMConfigConstructor:
         )
         adapter = OllamaAdapter(config)
         info = adapter.get_model_info()
-        assert info.model_name == "llama3"
+        assert info.name == "llama3"
         assert info.provider == "ollama"
 
     def test_llm_config_base_url_is_used(self):

@@ -119,5 +119,14 @@ class OllamaAdapter:
         return len(text) // 4
 
     def get_model_info(self) -> ModelInfo:
-        """Return metadata about the Ollama model."""
-        return ModelInfo(model_name=self._model, provider="ollama")
+        """Return metadata about the Ollama model.
+
+        context_window defaults to 4096 (conservative minimum for Ollama models).
+        cost_per_token is 0.0 — local inference has no per-token charge.
+        """
+        return ModelInfo(
+            name=self._model,
+            provider="ollama",
+            context_window=4096,
+            cost_per_token=0.0,
+        )
