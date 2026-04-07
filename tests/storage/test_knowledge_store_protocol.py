@@ -181,6 +181,26 @@ class _InMemoryStore:
     def get_escalated_items(self) -> list[WorkItem]:
         return [wi for wi in self._work_items.values() if wi.escalated]
 
+    def get_work_item_stats(self) -> dict[str, int]:
+        items = list(self._work_items.values())
+        return {
+            "total": len(items),
+            "pending": sum(1 for wi in items if not wi.resolved),
+            "resolved": sum(1 for wi in items if wi.resolved),
+            "escalated": sum(1 for wi in items if wi.escalated),
+        }
+
+    def delete_old_work_items(self, days: int) -> int:
+        from datetime import timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        to_delete = [
+            wid for wid, wi in self._work_items.items()
+            if wi.resolved and wi.resolved_at is not None and wi.resolved_at < cutoff
+        ]
+        for wid in to_delete:
+            del self._work_items[wid]
+        return len(to_delete)
+
     # --- Review Outcome operations ---
 
     def create_review_outcome(self, outcome: ReviewOutcome) -> ReviewOutcome:
