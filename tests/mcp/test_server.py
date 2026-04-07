@@ -106,11 +106,11 @@ def test_server_has_main_module():
 # ---------------------------------------------------------------------------
 
 
-def test_server_registers_exactly_13_tools():
-    """Given the server, when tools are listed, exactly 13 tools are registered."""
+def test_server_registers_exactly_15_tools():
+    """Given the server, when tools are listed, exactly 15 tools are registered."""
     tools = asyncio.run(mcp.list_tools())
-    assert len(tools) == 13, (
-        f"Expected 13 tools, got {len(tools)}: {[t.name for t in tools]}"
+    assert len(tools) == 15, (
+        f"Expected 15 tools, got {len(tools)}: {[t.name for t in tools]}"
     )
 
 
@@ -139,7 +139,7 @@ def test_tool_names_are_unique():
 
 
 def test_expected_tool_names_present():
-    """The 13 expected tool names are all registered."""
+    """The 15 expected tool names are all registered."""
     expected = {
         # Concept CRUD
         "create_concept",
@@ -150,6 +150,7 @@ def test_expected_tool_names_present():
         # Edge CRUD
         "create_edge",
         "get_edge",
+        "update_edge",
         "delete_edge",
         "list_edges",
         "get_neighbors",
@@ -157,6 +158,8 @@ def test_expected_tool_names_present():
         "search_semantic",
         "search_keyword",
         "get_metrics",
+        # Gap reporting
+        "report_gap",
     }
     tools = asyncio.run(mcp.list_tools())
     actual = {t.name for t in tools}
