@@ -525,6 +525,50 @@ class KnowledgeStore(Protocol):
         """
         ...
 
+    def count_covered_files(self) -> int:
+        """Count the number of distinct source file paths referenced by at
+        least one Concept's ``code_references``.
+
+        Used by MetricsEngine to compute coverage: the caller divides this
+        count by the known total number of source files in the repository.
+
+        Returns:
+            Number of distinct ``file_path`` values across all CodeReferences
+            stored in the concepts table.  Returns 0 when no Concepts have
+            CodeReferences.
+        """
+        ...
+
+    def count_fresh_active_concepts(self, active_days: int = 30) -> tuple[int, int]:
+        """Return (fresh_count, active_count) for freshness metric computation.
+
+        - *active* concept: one whose ``updated_at`` falls within the last
+          ``active_days`` days.
+        - *fresh* concept: an active concept whose ``last_verified`` is not
+          ``None`` and is more recent than its ``updated_at``.
+
+        Args:
+            active_days: Lookback window in days for "actively developed".
+                Defaults to 30.
+
+        Returns:
+            A ``(fresh_count, active_count)`` tuple.  ``fresh_count`` ≤
+            ``active_count``.  Both are 0 when no Concepts exist.
+        """
+        ...
+
+    def count_blast_radius_complete(self) -> tuple[int, int]:
+        """Return (with_profile_count, total_count) for blast-radius completeness.
+
+        A Concept is considered to have a *complete* blast-radius profile when
+        its ``impact_profile`` column is not ``NULL``.
+
+        Returns:
+            A ``(with_profile_count, total_count)`` tuple.  Both are 0 when
+            no Concepts exist.
+        """
+        ...
+
     # -------------------------------------------------------------------------
     # Bulk operations
     # -------------------------------------------------------------------------
