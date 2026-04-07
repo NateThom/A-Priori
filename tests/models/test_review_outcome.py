@@ -1,8 +1,13 @@
 """Tests for ReviewOutcome model — traced to AC3, AC4, AC5, and DoD."""
+import uuid
+
 import pytest
 from pydantic import ValidationError
 
 from apriori.models.review_outcome import ReviewOutcome
+
+CONCEPT_ID = uuid.uuid4()
+REVIEWER = "alice"
 
 
 class TestCorrectedAction:
@@ -11,7 +16,12 @@ class TestCorrectedAction:
     def test_corrected_with_error_type_passes(self):
         # Given: action="corrected", error_type="relationship_missing"
         # When: instantiated
-        outcome = ReviewOutcome(action="corrected", error_type="relationship_missing")
+        outcome = ReviewOutcome(
+            action="corrected",
+            concept_id=CONCEPT_ID,
+            reviewer=REVIEWER,
+            error_type="relationship_missing",
+        )
         # Then: validation passes
         assert outcome.action == "corrected"
         assert outcome.error_type == "relationship_missing"
@@ -25,7 +35,12 @@ class TestCorrectedAction:
             "other",
         ]
         for error_type in valid_types:
-            outcome = ReviewOutcome(action="corrected", error_type=error_type)
+            outcome = ReviewOutcome(
+                action="corrected",
+                concept_id=CONCEPT_ID,
+                reviewer=REVIEWER,
+                error_type=error_type,
+            )
             assert outcome.error_type == error_type
 
     def test_corrected_without_error_type_raises(self):
@@ -34,18 +49,23 @@ class TestCorrectedAction:
         # When: instantiated
         # Then: validation raises an error
         with pytest.raises(ValidationError):
-            ReviewOutcome(action="corrected")
+            ReviewOutcome(action="corrected", concept_id=CONCEPT_ID, reviewer=REVIEWER)
 
     def test_corrected_with_invalid_error_type_raises(self):
         with pytest.raises(ValidationError):
-            ReviewOutcome(action="corrected", error_type="made_up_type")
+            ReviewOutcome(
+                action="corrected",
+                concept_id=CONCEPT_ID,
+                reviewer=REVIEWER,
+                error_type="made_up_type",
+            )
 
 
 class TestVerifiedAction:
     """AC4: action='verified' + error_type set → validation raises error."""
 
     def test_verified_without_error_type_passes(self):
-        outcome = ReviewOutcome(action="verified")
+        outcome = ReviewOutcome(action="verified", concept_id=CONCEPT_ID, reviewer=REVIEWER)
         assert outcome.action == "verified"
         assert outcome.error_type is None
 
@@ -54,20 +74,30 @@ class TestVerifiedAction:
         # When: instantiated
         # Then: validation raises an error
         with pytest.raises(ValidationError):
-            ReviewOutcome(action="verified", error_type="relationship_missing")
+            ReviewOutcome(
+                action="verified",
+                concept_id=CONCEPT_ID,
+                reviewer=REVIEWER,
+                error_type="relationship_missing",
+            )
 
 
 class TestSerializationRoundTrip:
     """DoD: Serialization round-trips pass."""
 
     def test_round_trip_corrected(self):
-        original = ReviewOutcome(action="corrected", error_type="other")
+        original = ReviewOutcome(
+            action="corrected",
+            concept_id=CONCEPT_ID,
+            reviewer=REVIEWER,
+            error_type="other",
+        )
         data = original.model_dump()
         reconstructed = ReviewOutcome(**data)
         assert reconstructed == original
 
     def test_round_trip_verified(self):
-        original = ReviewOutcome(action="verified")
+        original = ReviewOutcome(action="verified", concept_id=CONCEPT_ID, reviewer=REVIEWER)
         data = original.model_dump()
         reconstructed = ReviewOutcome(**data)
         assert reconstructed == original
