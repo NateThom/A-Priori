@@ -17,7 +17,7 @@ from apriori.models.work_item import FailureRecord, WorkItem, VALID_ITEM_TYPES
 # ---------------------------------------------------------------------------
 class TestWorkItemDefaults:
     def test_valid_item_type_investigate_file_has_expected_defaults(self):
-        item = WorkItem(item_type="investigate_file", concept_id=uuid.uuid4())
+        item = WorkItem(item_type="investigate_file", concept_id=uuid.uuid4(), description="check file")
         assert item.failure_count == 0
         assert item.failure_records == []
         assert item.escalated is False
@@ -26,11 +26,11 @@ class TestWorkItemDefaults:
     def test_all_six_item_types_are_accepted(self):
         cid = uuid.uuid4()
         for item_type in VALID_ITEM_TYPES:
-            item = WorkItem(item_type=item_type, concept_id=cid)
+            item = WorkItem(item_type=item_type, concept_id=cid, description="test")
             assert item.item_type == item_type
 
     def test_id_is_auto_generated_uuid(self):
-        item = WorkItem(item_type="verify_concept", concept_id=uuid.uuid4())
+        item = WorkItem(item_type="verify_concept", concept_id=uuid.uuid4(), description="test")
         assert isinstance(item.id, uuid.UUID)
         assert item.id.version == 4
 
@@ -98,7 +98,7 @@ class TestFailureRecordRequiredFields:
             )
 
     def test_valid_failure_record_can_be_appended_to_work_item(self):
-        item = WorkItem(item_type="investigate_file", concept_id=uuid.uuid4())
+        item = WorkItem(item_type="investigate_file", concept_id=uuid.uuid4(), description="test")
         record = FailureRecord(
             attempted_at=datetime.now(timezone.utc),
             model_used="claude-sonnet-4-6",
@@ -160,6 +160,7 @@ class TestWorkItemSerializationRoundTrip:
         item = WorkItem(
             item_type="evaluate_relationship",
             concept_id=uuid.uuid4(),
+            description="evaluate relationship",
             failure_count=3,
             escalated=False,
         )
@@ -180,6 +181,7 @@ class TestWorkItemSerializationRoundTrip:
         item = WorkItem(
             item_type="verify_concept",
             concept_id=concept_id,
+            description="verify concept integrity",
             failure_count=1,
             failure_records=[record],
             escalated=False,
@@ -201,6 +203,7 @@ class TestWorkItemSerializationRoundTrip:
         item = WorkItem(
             item_type="reported_gap",
             concept_id=uuid.uuid4(),
+            description="reported gap in coverage",
             failure_count=0,
             escalated=False,
             resolved=True,
@@ -208,3 +211,140 @@ class TestWorkItemSerializationRoundTrip:
         json_str = item.model_dump_json()
         restored = WorkItem.model_validate_json(json_str)
         assert restored.resolved is True
+
+
+# ---------------------------------------------------------------------------
+# AC: Given the ERD §3.1.4 WorkItem specification
+#     When a WorkItem is instantiated
+#     Then it must support: description (required str), file_path (optional str,
+#     default None), created_at (datetime, auto-generated), resolved_at
+#     (optional datetime, default None)
+# ---------------------------------------------------------------------------
+class TestWorkItemERDFields:
+    def test_description_is_required(self):
+        """WorkItem without description raises ValidationError."""
+        with pytest.raises(ValidationError):
+            WorkItem(item_type="investigate_file", concept_id=uuid.uuid4())
+
+    def test_description_is_stored(self):
+        """WorkItem accepts and stores a description string."""
+        item = WorkItem(
+            item_type="investigate_file",
+            concept_id=uuid.uuid4(),
+            description="Investigate missing imports in auth module",
+        )
+        assert item.description == "Investigate missing imports in auth module"
+
+    def test_file_path_defaults_to_none(self):
+        """file_path defaults to None when not supplied."""
+        item = WorkItem(
+            item_type="investigate_file",
+            concept_id=uuid.uuid4(),
+            description="Some investigation",
+        )
+        assert item.file_path is None
+
+    def test_file_path_accepts_a_string(self):
+        """file_path stores the given path string."""
+        item = WorkItem(
+            item_type="investigate_file",
+            concept_id=uuid.uuid4(),
+            description="Check file for missing deps",
+            file_path="src/apriori/models/concept.py",
+        )
+        assert item.file_path == "src/apriori/models/concept.py"
+
+    def test_created_at_is_auto_generated_datetime(self):
+        """created_at is set automatically to a recent UTC datetime."""
+        before = datetime.now(timezone.utc)
+        item = WorkItem(
+            item_type="verify_concept",
+            concept_id=uuid.uuid4(),
+            description="Verify concept integrity",
+        )
+        after = datetime.now(timezone.utc)
+        assert isinstance(item.created_at, datetime)
+        assert before <= item.created_at <= after
+
+    def test_created_at_differs_across_instances(self):
+        """Each WorkItem gets its own auto-generated created_at."""
+        cid = uuid.uuid4()
+        item1 = WorkItem(item_type="verify_concept", concept_id=cid, description="first")
+        item2 = WorkItem(item_type="verify_concept", concept_id=cid, description="second")
+        # Both are datetimes; they may be equal if created fast but must both exist
+        assert isinstance(item1.created_at, datetime)
+        assert isinstance(item2.created_at, datetime)
+
+    def test_resolved_at_defaults_to_none(self):
+        """resolved_at defaults to None for new work items."""
+        item = WorkItem(
+            item_type="review_concept",
+            concept_id=uuid.uuid4(),
+            description="Review concept node",
+        )
+        assert item.resolved_at is None
+
+    def test_resolved_at_accepts_a_datetime(self):
+        """resolved_at stores the given datetime."""
+        ts = datetime.now(timezone.utc)
+        item = WorkItem(
+            item_type="review_concept",
+            concept_id=uuid.uuid4(),
+            description="Review concept node",
+            resolved_at=ts,
+        )
+        assert item.resolved_at == ts
+
+
+# ---------------------------------------------------------------------------
+# AC: Given a WorkItem with all fields populated
+#     When serialized to JSON via model_dump(mode="json")
+#     Then all 4 new fields appear in the output and round-trip back identically
+# ---------------------------------------------------------------------------
+class TestWorkItemNewFieldsRoundTrip:
+    def test_all_four_new_fields_present_in_model_dump(self):
+        """model_dump(mode='json') includes all 4 new fields."""
+        ts = datetime.now(timezone.utc)
+        item = WorkItem(
+            item_type="analyze_impact",
+            concept_id=uuid.uuid4(),
+            description="Analyze impact of edge removal",
+            file_path="src/apriori/graph/engine.py",
+            resolved_at=ts,
+        )
+        data = item.model_dump(mode="json")
+        assert "description" in data
+        assert "file_path" in data
+        assert "created_at" in data
+        assert "resolved_at" in data
+
+    def test_new_fields_round_trip_via_json(self):
+        """All 4 new fields survive a JSON round-trip."""
+        ts = datetime.now(timezone.utc)
+        item = WorkItem(
+            item_type="analyze_impact",
+            concept_id=uuid.uuid4(),
+            description="Analyze impact of edge removal",
+            file_path="src/apriori/graph/engine.py",
+            resolved_at=ts,
+        )
+        json_str = item.model_dump_json()
+        restored = WorkItem.model_validate_json(json_str)
+        assert restored.description == item.description
+        assert restored.file_path == item.file_path
+        assert restored.created_at == item.created_at
+        assert restored.resolved_at == item.resolved_at
+
+    def test_null_optionals_round_trip_via_json(self):
+        """file_path=None and resolved_at=None survive a JSON round-trip."""
+        item = WorkItem(
+            item_type="reported_gap",
+            concept_id=uuid.uuid4(),
+            description="Gap in documentation",
+        )
+        json_str = item.model_dump_json()
+        restored = WorkItem.model_validate_json(json_str)
+        assert restored.file_path is None
+        assert restored.resolved_at is None
+        assert restored.description == "Gap in documentation"
+        assert isinstance(restored.created_at, datetime)
