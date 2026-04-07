@@ -14,6 +14,10 @@ dependencies = [
     "anthropic>=0.40.0",
     "sqlite-vec>=0.1.0",
     "mcp>=1.26,<2.0",
+    "tree-sitter>=0.22",
+    "tree-sitter-python>=0.21",
+    "tree-sitter-typescript>=0.21",
+    "pathspec>=0.12",
 ]
 
 [project.optional-dependencies]
