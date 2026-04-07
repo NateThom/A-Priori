@@ -34,8 +34,8 @@ class TestConfigDefaults:
                 assert config.librarian.modulation_strength == 0.8
                 assert config.quality.co_regulation.enabled is True
                 assert config.work_queue.retention_days == 30
-                assert config.embedding.model == "all-MiniLM-L6-v2"
-                assert config.embedding.dimensions == 384
+                assert config.embedding.model == "intfloat/e5-base-v2"
+                assert config.embedding.dimensions == 768
             finally:
                 import os
                 os.chdir(old_cwd)

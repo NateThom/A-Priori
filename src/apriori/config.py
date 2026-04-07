@@ -105,10 +105,14 @@ class WorkQueueConfig(BaseModel):
 
 
 class EmbeddingConfig(BaseModel):
-    """Embedding service configuration."""
+    """Embedding service configuration.
 
-    model: str = "all-MiniLM-L6-v2"
-    dimensions: int = 384
+    Per S-2 spike decision: intfloat/e5-base-v2 via sentence-transformers.
+    Produces 768-dimensional vectors. Model is ~440MB and downloaded once.
+    """
+
+    model: str = "intfloat/e5-base-v2"
+    dimensions: int = 768
     batch_size: int = Field(default=32, ge=1)
 
 
