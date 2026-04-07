@@ -18,6 +18,10 @@ class CoRegulationAssessment(BaseModel):
     structural_corroboration_threshold: float = 0.3
     completeness_threshold: float = 0.4
 
+    # On failure, actionable guidance for the librarian's next attempt.
+    # On pass, may be empty or contain minor notes (ERD §3.1.6).
+    feedback: str = ""
+
     @computed_field
     @property
     def composite_pass(self) -> bool:

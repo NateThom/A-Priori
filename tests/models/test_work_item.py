@@ -348,3 +348,52 @@ class TestWorkItemNewFieldsRoundTrip:
         assert restored.resolved_at is None
         assert restored.description == "Gap in documentation"
         assert isinstance(restored.created_at, datetime)
+
+
+# ---------------------------------------------------------------------------
+# AC: Given a FailureRecord for a Level 1.5 failure,
+#     When the record is created,
+#     Then it must accept an optional reviewer_feedback field (default None).
+# ---------------------------------------------------------------------------
+class TestFailureRecordReviewerFeedback:
+    def test_reviewer_feedback_defaults_to_none(self):
+        record = FailureRecord(
+            attempted_at=datetime.now(timezone.utc),
+            model_used="claude-sonnet-4-6",
+            prompt_template="investigate_file_v1",
+            failure_reason="LLM returned low quality output",
+        )
+        assert record.reviewer_feedback is None
+
+    def test_reviewer_feedback_accepts_string(self):
+        feedback = "The concept name lacked specificity. Be more precise about the module boundary."
+        record = FailureRecord(
+            attempted_at=datetime.now(timezone.utc),
+            model_used="claude-sonnet-4-6",
+            prompt_template="investigate_file_v1",
+            failure_reason="Low specificity score",
+            reviewer_feedback=feedback,
+        )
+        assert record.reviewer_feedback == feedback
+
+    def test_reviewer_feedback_survives_json_round_trip(self):
+        feedback = "Focus on the public API boundary, not internal helpers."
+        record = FailureRecord(
+            attempted_at=datetime.now(timezone.utc),
+            model_used="claude-sonnet-4-6",
+            prompt_template="verify_concept_v2",
+            failure_reason="Incomplete analysis",
+            reviewer_feedback=feedback,
+        )
+        restored = FailureRecord.model_validate_json(record.model_dump_json())
+        assert restored.reviewer_feedback == feedback
+
+    def test_reviewer_feedback_none_survives_json_round_trip(self):
+        record = FailureRecord(
+            attempted_at=datetime.now(timezone.utc),
+            model_used="claude-sonnet-4-6",
+            prompt_template="investigate_file_v1",
+            failure_reason="Timeout",
+        )
+        restored = FailureRecord.model_validate_json(record.model_dump_json())
+        assert restored.reviewer_feedback is None

@@ -32,7 +32,8 @@ class FailureRecord(BaseModel):
     """Diagnostic context captured when a librarian iteration fails.
 
     Embedded in WorkItem.failure_records as a JSON array in SQLite.
-    All four fields are required — no partial failure records.
+    The four core fields are required — no partial failure records.
+    reviewer_feedback carries co-regulation guidance for the next retry attempt.
     """
 
     attempted_at: datetime
@@ -40,6 +41,7 @@ class FailureRecord(BaseModel):
     prompt_template: str
     failure_reason: str
     quality_scores: Optional[dict] = None
+    reviewer_feedback: Optional[str] = None
 
 
 class WorkItem(BaseModel):
