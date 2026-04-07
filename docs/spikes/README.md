@@ -22,7 +22,7 @@ These can be scheduled as first-stories within their parent epics. The epic can 
 
 | ID | Spike | Status | Parent Epic | Est. Hours | Decision Record |
 |----|-------|--------|-------------|------------|-----------------|
-| S-3 | Tree-sitter Grammar Quality | not-started | Structural Engine | 3-4 | — |
+| S-3 | Tree-sitter Grammar Quality | done | Structural Engine | 3-4 | [S-3-tree-sitter-grammar-quality.md](./S-3-tree-sitter-grammar-quality.md) |
 | S-4 | Blast Radius Validation | not-started | Phase 3: Blast Radius | 2-3 | — |
 | S-5 | YAML Performance at Scale | not-started | Storage Layer | 2-3 | — |
 | S-7 | Audit UI Technology | not-started | Audit UI | 4-6 | — |
@@ -42,9 +42,10 @@ These can be scheduled as first-stories within their parent epics. The epic can 
 **Why it blocks:** The `vec0` virtual table requires a fixed embedding dimension at creation time. Can't define the storage schema without this.
 **Decision:** Local `e5-base-v2` via `sentence-transformers`, 768 dimensions, cosine distance. See [decision record](./S-2-embedding-strategy.md).
 
-### S-3: Tree-sitter Grammar Quality
+### S-3: Tree-sitter Grammar Quality (DONE)
 **Question:** How complete is tree-sitter's Python and TypeScript grammar coverage for our extraction needs? What structural entities does it miss?
 **Why it doesn't block definition:** The structural engine epic can be defined as "extract functions, classes, modules, imports using tree-sitter." Gaps discovered here become workaround stories.
+**Decision:** tree-sitter-python 0.25.0 and tree-sitter-typescript 0.23.2 are fit for purpose. Zero parse errors on 16 diverse cases. 9 extraction gaps documented with structural workarounds. `arch:tree-sitter-only` validated. See [decision record](./S-3-tree-sitter-grammar-quality.md).
 
 ### S-4: Blast Radius Validation
 **Question:** How do we validate that blast radius predictions are accurate? What does the test harness look like?
