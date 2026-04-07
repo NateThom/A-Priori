@@ -283,6 +283,31 @@ class _InMemoryStore:
             "review_outcome_count": len(self._review_outcomes),
         }
 
+    def count_covered_files(self) -> int:
+        seen: set[str] = set()
+        for c in self._concepts.values():
+            for ref in c.code_references:
+                seen.add(ref.file_path)
+        return len(seen)
+
+    def count_fresh_active_concepts(self, active_days: int = 30) -> tuple[int, int]:
+        from datetime import datetime, timedelta, timezone
+        cutoff = datetime.now(timezone.utc) - timedelta(days=active_days)
+        active = [
+            c for c in self._concepts.values()
+            if c.updated_at is not None and c.updated_at >= cutoff
+        ]
+        fresh = sum(
+            1 for c in active
+            if c.last_verified is not None and c.last_verified > c.updated_at
+        )
+        return fresh, len(active)
+
+    def count_blast_radius_complete(self) -> tuple[int, int]:
+        total = len(self._concepts)
+        with_profile = sum(1 for c in self._concepts.values() if c.impact_profile is not None)
+        return with_profile, total
+
     # --- Bulk operations ---
 
     def rebuild_index(self) -> None:

@@ -904,6 +904,68 @@ class SQLiteStore:
             "review_outcome_count": conn.execute("SELECT COUNT(*) FROM review_outcomes").fetchone()[0],
         }
 
+    def count_covered_files(self) -> int:
+        """Count distinct file paths referenced by at least one Concept.
+
+        Uses json_each to expand the code_references JSON array in a single
+        SQL query (no Python-side iteration).
+        """
+        conn = self._get_connection()
+        row = conn.execute(
+            """
+            SELECT COUNT(DISTINCT json_extract(j.value, '$.file_path'))
+            FROM concepts
+            CROSS JOIN json_each(concepts.code_references) AS j
+            """
+        ).fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
+    def count_fresh_active_concepts(self, active_days: int = 30) -> tuple[int, int]:
+        """Return (fresh_count, active_count) for freshness metric computation.
+
+        Single SQL query with a datetime comparison. active_days is applied
+        server-side to avoid Python-side filtering.
+        """
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=active_days)
+        ).isoformat()
+        conn = self._get_connection()
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS active_count,
+                SUM(
+                    CASE
+                        WHEN last_verified IS NOT NULL
+                             AND last_verified > updated_at
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS fresh_count
+            FROM concepts
+            WHERE updated_at >= ?
+            """,
+            (cutoff,),
+        ).fetchone()
+        if row is None:
+            return 0, 0
+        active = int(row[0]) if row[0] is not None else 0
+        fresh = int(row[1]) if row[1] is not None else 0
+        return fresh, active
+
+    def count_blast_radius_complete(self) -> tuple[int, int]:
+        """Return (with_profile_count, total_count) for blast-radius completeness.
+
+        COUNT(impact_profile) counts non-NULL rows without Python iteration.
+        """
+        conn = self._get_connection()
+        row = conn.execute(
+            "SELECT COUNT(*) AS total, COUNT(impact_profile) AS with_profile FROM concepts"
+        ).fetchone()
+        if row is None:
+            return 0, 0
+        return int(row[1]), int(row[0])
+
     # -----------------------------------------------------------------------
     # Bulk operations
     # -----------------------------------------------------------------------
