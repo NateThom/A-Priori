@@ -1,6 +1,6 @@
 default:
   - name: test
-    run: ".venv/bin/python -m pytest --tb=short -q"
+    run: "/opt/apriori-venv/bin/python -m pytest --tb=short -q"
     required: true
     timeout: 120s
 
@@ -15,7 +15,7 @@ columns:
     extend: true
     gates:
       - name: test-full
-        run: ".venv/bin/python -m pytest --tb=short"
+        run: "/opt/apriori-venv/bin/python -m pytest --tb=short"
         required: true
         timeout: 120s
 
@@ -25,7 +25,3 @@ settings:
     CI: "true"
     PYTHONPATH: "src"
   total_timeout: 300s
-  budget:
-    max_input_tokens: 5000000
-    max_output_tokens: 1500000
-    warn_pct: 75
