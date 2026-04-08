@@ -291,6 +291,17 @@ class KnowledgeStore(Protocol):
         """
         ...
 
+    def list_work_items(self, limit: int = 20) -> list[WorkItem]:
+        """Return recent WorkItems ordered by ``created_at`` descending.
+
+        Args:
+            limit: Maximum number of items to return. Defaults to 20.
+
+        Returns:
+            Up to ``limit`` WorkItems, newest first.
+        """
+        ...
+
     def record_failure(
         self, work_item_id: uuid.UUID, record: FailureRecord
     ) -> WorkItem:

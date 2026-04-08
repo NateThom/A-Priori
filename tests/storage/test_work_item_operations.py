@@ -293,6 +293,40 @@ class TestEscalateWorkItem:
 
 
 # ---------------------------------------------------------------------------
+# AC-4b: list_work_items returns newest-first with limit
+# ---------------------------------------------------------------------------
+
+class TestListWorkItems:
+    """list_work_items returns most recent work items ordered by created_at desc."""
+
+    def test_list_work_items_orders_newest_first_with_limit(self, store: SQLiteStore):
+        concept = _make_concept()
+        store.create_concept(concept)
+
+        older = _make_work_item(
+            concept.id,
+            description="older",
+            created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        )
+        newer = _make_work_item(
+            concept.id,
+            description="newer",
+            created_at=datetime.now(timezone.utc),
+        )
+        middle = _make_work_item(
+            concept.id,
+            description="middle",
+            created_at=datetime.now(timezone.utc) - timedelta(minutes=2),
+        )
+        store.create_work_item(older)
+        store.create_work_item(newer)
+        store.create_work_item(middle)
+
+        recent = store.list_work_items(limit=2)
+        assert [item.description for item in recent] == ["newer", "middle"]
+
+
+# ---------------------------------------------------------------------------
 # AC-5: Concurrent reads — WAL mode, no locking errors
 # ---------------------------------------------------------------------------
 
