@@ -1,6 +1,6 @@
 default:
   - name: test
-    run: "uv run pytest --tb=short -q"
+    run: "/opt/apriori-venv/bin/python -m pytest --tb=short -q"
     required: true
     timeout: 120s
 
@@ -15,15 +15,13 @@ columns:
     extend: true
     gates:
       - name: test-full
-        run: "uv run pytest --tb=short"
+        run: "/opt/apriori-venv/bin/python -m pytest --tb=short"
         required: true
         timeout: 120s
 
 settings:
   cwd: .
-  env: { CI: "true" }
+  env:
+    CI: "true"
+    PYTHONPATH: "src"
   total_timeout: 300s
-  budget:
-    max_input_tokens: 5000000
-    max_output_tokens: 1500000
-    warn_pct: 75
