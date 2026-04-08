@@ -1,6 +1,6 @@
 default:
   - name: test
-    run: "/opt/apriori-venv/bin/python -m pytest --tb=short -q"
+    run: "PYTHON_BIN=''; for candidate in /opt/apriori-venv/bin/python .venv/bin/python python3; do if [ -x \"$candidate\" ] && PYTHONPATH=src \"$candidate\" -c 'import fastapi, apriori' >/dev/null 2>&1; then PYTHON_BIN=\"$candidate\"; break; fi; done; [ -n \"$PYTHON_BIN\" ] || { echo 'No gate python with required imports available' >&2; exit 1; }; PYTHONPATH=src \"$PYTHON_BIN\" -m pytest --tb=short -q"
     required: true
     timeout: 120s
 
@@ -15,7 +15,7 @@ columns:
     extend: true
     gates:
       - name: test-full
-        run: "/opt/apriori-venv/bin/python -m pytest --tb=short"
+        run: "PYTHON_BIN=''; for candidate in /opt/apriori-venv/bin/python .venv/bin/python python3; do if [ -x \"$candidate\" ] && PYTHONPATH=src \"$candidate\" -c 'import fastapi, apriori' >/dev/null 2>&1; then PYTHON_BIN=\"$candidate\"; break; fi; done; [ -n \"$PYTHON_BIN\" ] || { echo 'No gate python with required imports available' >&2; exit 1; }; PYTHONPATH=src \"$PYTHON_BIN\" -m pytest --tb=short"
         required: true
         timeout: 120s
 
