@@ -102,15 +102,20 @@ def test_server_has_main_module():
 
 
 # ---------------------------------------------------------------------------
-# AC2: 13 tools registered with names, descriptions, and input schemas
+# AC2: Tools registered with names, descriptions, and input schemas
 # ---------------------------------------------------------------------------
 
 
-def test_server_registers_exactly_15_tools():
-    """Given the server, when tools are listed, exactly 15 tools are registered."""
+def test_server_registers_expected_tool_count():
+    """Given the server, when tools are listed, the expected number are registered.
+
+    AP-68 scaffolded 13 tools. AP-70 added 5 read tools (search, traverse,
+    list_edge_types, get_status, blast_radius) and AP-72 added report_gap for
+    a total of 20.
+    """
     tools = asyncio.run(mcp.list_tools())
-    assert len(tools) == 15, (
-        f"Expected 15 tools, got {len(tools)}: {[t.name for t in tools]}"
+    assert len(tools) == 20, (
+        f"Expected 20 tools, got {len(tools)}: {[t.name for t in tools]}"
     )
 
 
@@ -132,14 +137,14 @@ def test_all_tools_have_input_schemas():
 
 
 def test_tool_names_are_unique():
-    """All 13 tool names are distinct."""
+    """All tool names are distinct."""
     tools = asyncio.run(mcp.list_tools())
     names = [t.name for t in tools]
     assert len(names) == len(set(names)), f"Duplicate tool names: {names}"
 
 
 def test_expected_tool_names_present():
-    """The 15 expected tool names are all registered."""
+    """All expected tool names are registered (AP-68 + AP-70 + AP-72 additions)."""
     expected = {
         # Concept CRUD
         "create_concept",
@@ -154,11 +159,17 @@ def test_expected_tool_names_present():
         "delete_edge",
         "list_edges",
         "get_neighbors",
-        # Search & metrics
+        # Search & metrics (AP-68 scaffold)
         "search_semantic",
         "search_keyword",
         "get_metrics",
-        # Gap reporting
+        # Read tools added by AP-70
+        "search",
+        "traverse",
+        "list_edge_types",
+        "get_status",
+        "blast_radius",
+        # Gap reporting (AP-72)
         "report_gap",
     }
     tools = asyncio.run(mcp.list_tools())

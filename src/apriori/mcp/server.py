@@ -1,4 +1,4 @@
-"""MCP server for A-Priori (Story 4.1 scaffold; Stories 4.2/4.3 write tools; ERD §3.4).
+"""MCP server for A-Priori (AP-68 scaffold; AP-70 read tools; AP-72 write tools; ERD §3.4).
 
 Thin shell using FastMCP. All business logic lives in core apriori modules
 (arch:mcp-thin-shell, arch:core-lib-thin-shells). Tool functions are plain
@@ -26,6 +26,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 
 from apriori.config import load_config
+from apriori.embedding.protocol import EmbeddingServiceProtocol
 from apriori.models.concept import Concept
 from apriori.models.edge import Edge, EdgeTypeVocabulary, load_edge_vocabulary
 from apriori.models.work_item import WorkItem
@@ -37,24 +38,35 @@ from apriori.storage.yaml_store import YamlStore
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Module-level store state — set by lifespan, injectable for tests
+# Module-level store — set by lifespan, accessed by tool functions.
+# Tests inject values directly (e.g. ``mcp_server._store = test_store``).
 # ---------------------------------------------------------------------------
 
 _store: Optional[KnowledgeStore] = None
+_embedding_service: Optional[EmbeddingServiceProtocol] = None
 _edge_vocabulary: Optional[EdgeTypeVocabulary] = None
 
 
 def _get_store() -> KnowledgeStore:
-    """Return the active KnowledgeStore, or raise RuntimeError if not set."""
+    """Return the active KnowledgeStore or raise ToolError if not initialised."""
     if _store is None:
-        raise RuntimeError("Store not initialized — is the MCP server running?")
+        raise ToolError("KnowledgeStore not initialised — is the server running?")
     return _store
 
 
+def _get_embedding_service() -> EmbeddingServiceProtocol:
+    """Return the active EmbeddingService, loading it lazily on first call."""
+    global _embedding_service
+    if _embedding_service is None:
+        from apriori.embedding.service import EmbeddingService  # heavy import
+        _embedding_service = EmbeddingService()
+    return _embedding_service
+
+
 def _get_edge_vocabulary() -> EdgeTypeVocabulary:
-    """Return the active EdgeTypeVocabulary, or raise RuntimeError if not set."""
+    """Return the active EdgeTypeVocabulary, or raise ToolError if not set."""
     if _edge_vocabulary is None:
-        raise RuntimeError("Edge vocabulary not initialized — is the MCP server running?")
+        raise ToolError("Edge vocabulary not initialized — is the MCP server running?")
     return _edge_vocabulary
 
 
@@ -103,8 +115,8 @@ def build_lifespan(
 
     Reads storage paths from config when not explicitly supplied. Used directly
     by the server (default paths) and by tests (injected tmp_path). Sets the
-    module-level ``_store`` and ``_edge_vocabulary`` on entry and clears them
-    on exit.
+    module-level ``_store``, ``_embedding_service``, and ``_edge_vocabulary``
+    on entry and clears them on exit.
 
     Args:
         db_path: Override for the SQLite database path.
@@ -117,7 +129,7 @@ def build_lifespan(
 
     @asynccontextmanager
     async def lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
-        global _store, _edge_vocabulary
+        global _store, _embedding_service, _edge_vocabulary
 
         config = load_config()
 
@@ -134,12 +146,14 @@ def build_lifespan(
         logger.info("KnowledgeStore ready (DualWriter)")
 
         _store = store
+        _embedding_service = None  # loaded lazily on first semantic search
         _edge_vocabulary = load_edge_vocabulary(config)
 
         try:
             yield {"store": store}
         finally:
             _store = None
+            _embedding_service = None
             _edge_vocabulary = None
             logger.info("MCP server shutting down — KnowledgeStore released")
 
@@ -153,8 +167,78 @@ def build_lifespan(
 mcp = FastMCP("apriori", lifespan=build_lifespan())
 
 # ---------------------------------------------------------------------------
-# Concept tools (Stories 4.2 / 4.3)
+# Read tools — Story 4.2 (AP-70)
 # ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+@safe_tool
+def search(query: str, mode: str = "keyword", limit: int = 10) -> list:
+    """Search the knowledge graph using one of four modes.
+
+    Modes:
+    - ``"keyword"``: FTS5 full-text search on concept name and description.
+    - ``"semantic"``: Vector similarity search using the configured embedding model.
+    - ``"exact"``: Case-sensitive exact match on concept name.
+    - ``"file"``: Return all concepts that reference the given file path.
+
+    Args:
+        query: Search string (keyword/semantic/exact) or file path (file mode).
+        mode: One of ``"keyword"``, ``"semantic"``, ``"exact"``, ``"file"``.
+        limit: Maximum results to return (not applied in ``"file"`` or ``"exact"`` mode).
+
+    Returns:
+        List of matching concept dicts.
+    """
+    store = _get_store()
+
+    if mode == "keyword":
+        concepts = store.search_keyword(query, limit=limit)
+    elif mode == "semantic":
+        embedding = _get_embedding_service().generate_embedding(query, text_type="query")
+        concepts = store.search_semantic(embedding, limit=limit)
+    elif mode == "exact":
+        concepts = [c for c in store.list_concepts() if c.name == query]
+    elif mode == "file":
+        concepts = store.search_by_file(query)
+    else:
+        raise ToolError(f"Unknown search mode '{mode}'. Use keyword, semantic, exact, or file.")
+
+    return [c.model_dump(mode="json") for c in concepts]
+
+
+@mcp.tool()
+@safe_tool
+def traverse(concept_id: str, max_hops: int = 3) -> dict:
+    """Breadth-first traversal of the knowledge graph from a starting concept.
+
+    Follows outgoing edges and returns all reachable concepts up to ``max_hops``
+    edges from the starting concept, along with the connecting edges between them.
+
+    Args:
+        concept_id: UUID string of the starting concept.
+        max_hops: Maximum number of edge hops to follow (default 3).
+
+    Returns:
+        Dict with ``concepts`` (list of concept dicts in BFS order) and
+        ``edges`` (list of edge dicts connecting those concepts).
+    """
+    store = _get_store()
+    concepts = store.traverse_graph(
+        start_id=uuid.UUID(concept_id),
+        max_depth=max_hops,
+    )
+    concept_ids = {c.id for c in concepts}
+    edges = [
+        e
+        for cid in concept_ids
+        for e in store.list_edges(source_id=cid)
+        if e.target_id in concept_ids
+    ]
+    return {
+        "concepts": [c.model_dump(mode="json") for c in concepts],
+        "edges": [e.model_dump(mode="json") for e in edges],
+    }
 
 
 @mcp.tool()
@@ -162,13 +246,77 @@ mcp = FastMCP("apriori", lifespan=build_lifespan())
 def get_concept(concept_id: str) -> dict:
     """Retrieve a Concept from the knowledge graph by its UUID.
 
+    Returns the full concept including metadata, code references, and all
+    connected edges (both outgoing and incoming).
+
     Args:
         concept_id: UUID string of the concept to retrieve.
 
     Returns:
-        Concept data as a dict, or an error if not found.
+        Concept data as a dict with an additional ``edges`` key listing all
+        edges that involve this concept.
+
+    Raises:
+        ToolError: If the concept does not exist.
     """
-    raise NotImplementedError("Implemented in Story 4.2")
+    store = _get_store()
+    cid = uuid.UUID(concept_id)
+    concept = store.get_concept(cid)
+    if concept is None:
+        raise ToolError(f"Concept not found: {concept_id}")
+    edges = store.list_edges(source_id=cid) + store.list_edges(target_id=cid)
+    result = concept.model_dump(mode="json")
+    result["edges"] = [e.model_dump(mode="json") for e in edges]
+    return result
+
+
+@mcp.tool()
+@safe_tool
+def list_edge_types() -> list:
+    """Return the configured edge type vocabulary.
+
+    Edge types are defined in ``apriori.config.yaml`` (or the defaults). This
+    tool lets agents and callers discover valid edge types before creating edges.
+
+    Returns:
+        Sorted list of edge type strings (e.g. ``["calls", "depends-on", ...]``).
+    """
+    config = load_config()
+    return sorted(config.edge_types)
+
+
+@mcp.tool()
+@safe_tool
+def get_status() -> dict:
+    """Return aggregate statistics about the current knowledge graph.
+
+    Returns:
+        Dict with at minimum: ``concept_count``, ``edge_count``,
+        ``work_item_count``, ``review_outcome_count``.
+    """
+    return _get_store().get_metrics()
+
+
+@mcp.tool()
+@safe_tool
+def blast_radius(concept_id: str) -> str:
+    """Analyse the blast radius of changes to a concept (Phase 3 placeholder).
+
+    This tool is not yet implemented. It will be available in Phase 3 once the
+    impact analysis pipeline is complete.
+
+    Args:
+        concept_id: UUID string of the concept to analyse.
+
+    Returns:
+        Placeholder message indicating the feature is not yet available.
+    """
+    return "Blast radius analysis is not yet available. This feature is planned for Phase 3."
+
+
+# ---------------------------------------------------------------------------
+# Read tools — existing scaffolded stubs, implemented here (AP-70)
+# ---------------------------------------------------------------------------
 
 
 @mcp.tool()
@@ -183,7 +331,24 @@ def list_concepts(labels: Optional[list[str]] = None) -> list:
     Returns:
         List of concept dicts.
     """
-    raise NotImplementedError("Implemented in Story 4.2")
+    store = _get_store()
+    label_set = set(labels) if labels else None
+    return [c.model_dump(mode="json") for c in store.list_concepts(labels=label_set)]
+
+
+@mcp.tool()
+@safe_tool
+def search_keyword(query: str, limit: int = 10) -> list:
+    """Find Concepts whose name or description contains the query string (FTS5).
+
+    Args:
+        query: Substring to search for (case-insensitive).
+        limit: Maximum number of results to return (default 10).
+
+    Returns:
+        List of matching concept dicts.
+    """
+    return [c.model_dump(mode="json") for c in _get_store().search_keyword(query, limit=limit)]
 
 
 @mcp.tool()
@@ -201,22 +366,8 @@ def search_semantic(query: str, limit: int = 10) -> list:
     Returns:
         List of concept dicts ordered by similarity descending.
     """
-    raise NotImplementedError("Implemented in Story 4.2")
-
-
-@mcp.tool()
-@safe_tool
-def search_keyword(query: str, limit: int = 10) -> list:
-    """Find Concepts whose name or description contains the query string.
-
-    Args:
-        query: Substring to search for (case-insensitive).
-        limit: Maximum number of results to return (default 10).
-
-    Returns:
-        List of matching concept dicts.
-    """
-    raise NotImplementedError("Implemented in Story 4.2")
+    embedding = _get_embedding_service().generate_embedding(query, text_type="query")
+    return [c.model_dump(mode="json") for c in _get_store().search_semantic(embedding, limit=limit)]
 
 
 @mcp.tool()
@@ -236,7 +387,14 @@ def get_neighbors(
     Returns:
         List of neighbouring concept dicts.
     """
-    raise NotImplementedError("Implemented in Story 4.2")
+    return [
+        c.model_dump(mode="json")
+        for c in _get_store().get_neighbors(
+            concept_id=uuid.UUID(concept_id),
+            edge_type=edge_type,
+            direction=direction,
+        )
+    ]
 
 
 @mcp.tool()
@@ -248,7 +406,7 @@ def get_metrics() -> dict:
         Dict with keys: concept_count, edge_count, work_item_count,
         review_outcome_count, and any additional implementation metrics.
     """
-    raise NotImplementedError("Implemented in Story 4.2")
+    return _get_store().get_metrics()
 
 
 @mcp.tool()
@@ -260,9 +418,16 @@ def get_edge(edge_id: str) -> dict:
         edge_id: UUID string of the edge to retrieve.
 
     Returns:
-        Edge data as a dict, or an error if not found.
+        Edge data as a dict.
+
+    Raises:
+        ToolError: If the edge does not exist.
     """
-    raise NotImplementedError("Implemented in Story 4.2")
+    store = _get_store()
+    edge = store.get_edge(uuid.UUID(edge_id))
+    if edge is None:
+        raise ToolError(f"Edge not found: {edge_id}")
+    return edge.model_dump(mode="json")
 
 
 @mcp.tool()
@@ -284,7 +449,19 @@ def list_edges(
     Returns:
         List of edge dicts.
     """
-    raise NotImplementedError("Implemented in Story 4.2")
+    return [
+        e.model_dump(mode="json")
+        for e in _get_store().list_edges(
+            source_id=uuid.UUID(source_id) if source_id else None,
+            target_id=uuid.UUID(target_id) if target_id else None,
+            edge_type=edge_type,
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Write tools — Story 4.3 (AP-72)
+# ---------------------------------------------------------------------------
 
 
 @mcp.tool()
