@@ -258,8 +258,11 @@ class IntegrationDecisionTree:
     def _handle_agreement(self, concept: Concept, git_hash: str) -> ConceptIntegrationResult:
         now = datetime.now(timezone.utc)
         new_confidence = min(1.0, concept.confidence + 0.05)
+        # Remove 'stale' on successful re-verification (Story 8.2, AC3)
+        labels = set(concept.labels) - {"stale"}
         updated = concept.model_copy(
             update={
+                "labels": labels,
                 "last_verified": now,
                 "confidence": new_confidence,
                 "derived_from_code_version": git_hash,
@@ -278,9 +281,12 @@ class IntegrationDecisionTree:
                 merged_description += " "
             merged_description += sentence
         now = datetime.now(timezone.utc)
+        # Remove 'stale' on successful re-verification (Story 8.2, AC3)
+        labels = set(concept.labels) - {"stale"}
         updated = concept.model_copy(
             update={
                 "description": merged_description,
+                "labels": labels,
                 "derived_from_code_version": git_hash,
                 "updated_at": now,
             }
