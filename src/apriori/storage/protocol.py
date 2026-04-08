@@ -25,6 +25,7 @@ from typing import Any, Optional, Protocol, runtime_checkable
 
 from apriori.models.concept import Concept
 from apriori.models.edge import Edge
+from apriori.models.librarian_activity import LibrarianActivity
 from apriori.models.review_outcome import ReviewOutcome
 from apriori.models.work_item import FailureRecord, WorkItem
 
@@ -583,5 +584,38 @@ class KnowledgeStore(Protocol):
             Drops and rebuilds the sqlite-vec index. The store remains readable
             during the rebuild in implementations that support it, but search
             results may be stale until the operation completes.
+        """
+        ...
+
+    # -------------------------------------------------------------------------
+    # Librarian Activity operations
+    # -------------------------------------------------------------------------
+
+    def create_librarian_activity(self, activity: LibrarianActivity) -> LibrarianActivity:
+        """Persist a LibrarianActivity record for one loop iteration.
+
+        SQLite-only — activity records are never dual-written to YAML.
+
+        Args:
+            activity: A fully populated LibrarianActivity instance.
+
+        Returns:
+            The persisted LibrarianActivity (identical to the argument).
+
+        Raises:
+            ValueError: If an activity with ``activity.id`` already exists.
+        """
+        ...
+
+    def list_librarian_activities(
+        self, run_id: Optional[uuid.UUID] = None
+    ) -> list[LibrarianActivity]:
+        """Return all LibrarianActivity records, optionally filtered by run_id.
+
+        Args:
+            run_id: When provided, return only records from this run.
+
+        Returns:
+            A list of LibrarianActivity records ordered by ``iteration`` ascending.
         """
         ...

@@ -28,6 +28,7 @@ from apriori.embedding.protocol import EmbeddingServiceProtocol
 from apriori.models.concept import Concept, CodeReference
 from apriori.models.edge import Edge
 from apriori.models.impact import ImpactEntry, ImpactProfile
+from apriori.models.librarian_activity import LibrarianActivity
 from apriori.models.review_outcome import ReviewOutcome
 from apriori.models.work_item import FailureRecord, WorkItem
 
@@ -110,6 +111,23 @@ CREATE TABLE IF NOT EXISTS review_outcomes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_review_outcomes_concept ON review_outcomes(concept_id);
+
+CREATE TABLE IF NOT EXISTS librarian_activity (
+    id                  TEXT PRIMARY KEY,
+    run_id              TEXT NOT NULL,
+    iteration           INTEGER NOT NULL,
+    work_item_id        TEXT,
+    status              TEXT NOT NULL,
+    concepts_integrated INTEGER NOT NULL DEFAULT 0,
+    edges_integrated    INTEGER NOT NULL DEFAULT 0,
+    model_used          TEXT NOT NULL DEFAULT '',
+    duration_seconds    REAL NOT NULL DEFAULT 0.0,
+    failure_reason      TEXT,
+    created_at          TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_librarian_activity_run ON librarian_activity(run_id);
+CREATE INDEX IF NOT EXISTS idx_librarian_activity_iter ON librarian_activity(iteration);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS concepts_fts USING fts5(
     id UNINDEXED,
@@ -768,6 +786,73 @@ class SQLiteStore:
         conn = self._get_connection()
         rows = conn.execute("SELECT * FROM review_outcomes").fetchall()
         return [self._row_to_review_outcome(r) for r in rows]
+
+    # -----------------------------------------------------------------------
+    # Librarian Activity operations — SQLite-only
+    # -----------------------------------------------------------------------
+
+    def create_librarian_activity(self, activity: LibrarianActivity) -> LibrarianActivity:
+        """Persist a LibrarianActivity record for one loop iteration."""
+        conn = self._get_connection()
+        conn.execute(
+            """
+            INSERT INTO librarian_activity
+                (id, run_id, iteration, work_item_id, status,
+                 concepts_integrated, edges_integrated, model_used,
+                 duration_seconds, failure_reason, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                str(activity.id),
+                str(activity.run_id),
+                activity.iteration,
+                str(activity.work_item_id) if activity.work_item_id else None,
+                activity.status,
+                activity.concepts_integrated,
+                activity.edges_integrated,
+                activity.model_used,
+                activity.duration_seconds,
+                activity.failure_reason,
+                self._dt_to_iso(activity.created_at),
+            ),
+        )
+        conn.commit()
+        return activity
+
+    def list_librarian_activities(
+        self, run_id: Optional[uuid.UUID] = None
+    ) -> list[LibrarianActivity]:
+        """Return all LibrarianActivity records, optionally filtered by run_id."""
+        conn = self._get_connection()
+        if run_id is not None:
+            rows = conn.execute(
+                "SELECT * FROM librarian_activity WHERE run_id = ? ORDER BY iteration ASC",
+                (str(run_id),),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM librarian_activity ORDER BY iteration ASC"
+            ).fetchall()
+        return [self._row_to_librarian_activity(r) for r in rows]
+
+    def _row_to_librarian_activity(self, row) -> LibrarianActivity:
+        """Convert a sqlite3 row to a LibrarianActivity instance."""
+        created_at = self._iso_to_dt(row["created_at"])
+        if created_at is None:
+            created_at = datetime.now(timezone.utc)
+        return LibrarianActivity(
+            id=uuid.UUID(row["id"]),
+            run_id=uuid.UUID(row["run_id"]),
+            iteration=row["iteration"],
+            work_item_id=uuid.UUID(row["work_item_id"]) if row["work_item_id"] else None,
+            status=row["status"],
+            concepts_integrated=row["concepts_integrated"],
+            edges_integrated=row["edges_integrated"],
+            model_used=row["model_used"] or "",
+            duration_seconds=row["duration_seconds"] or 0.0,
+            failure_reason=row["failure_reason"],
+            created_at=created_at,
+        )
 
     # -----------------------------------------------------------------------
     # Search — FTS5 keyword search (semantic search deferred to Story 2.5)
