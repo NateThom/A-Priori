@@ -21,7 +21,9 @@ columns:
 
 settings:
   cwd: .
-  env: { CI: "true" }
+  env:
+    CI: "true"
+    PYTHONPATH: "src"
   total_timeout: 300s
   budget:
     max_input_tokens: 5000000
