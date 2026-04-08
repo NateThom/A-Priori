@@ -229,7 +229,7 @@ class DualWriter:
         return self._sqlite.get_pending_work_items()
 
     def list_work_items(self, limit: int = 20) -> list[WorkItem]:
-        return self._sqlite.list_work_items(limit=limit)
+        return self._sqlite.list_work_items(limit)
 
     def record_failure(self, work_item_id: uuid.UUID, record: FailureRecord) -> WorkItem:
         return self._sqlite.record_failure(work_item_id, record)

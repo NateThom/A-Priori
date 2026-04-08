@@ -1,32 +1,71 @@
-"""Pydantic response models for the UI read-only API."""
+"""Response models for the A-Priori read-only Graph API (Story 11.2a)."""
 
 from __future__ import annotations
 
+import uuid
+from typing import Any, Optional
+
 from pydantic import BaseModel
 
-from apriori.models.concept import Concept
-from apriori.models.edge import Edge
-from apriori.models.work_item import WorkItem
+
+class ConceptSummary(BaseModel):
+    """Minimal concept representation for the list endpoint."""
+
+    id: uuid.UUID
+    name: str
+    description: str
+    labels: list[str]
+    confidence: float
+    created_by: str
+    created_at: str
+    updated_at: str
 
 
-class ConceptDetailResponse(BaseModel):
-    """Full concept detail payload with connected edges."""
+class EdgeSummary(BaseModel):
+    """Edge representation for the concept detail and graph endpoints."""
 
-    concept: Concept
-    edges: list[Edge]
+    id: uuid.UUID
+    source_id: uuid.UUID
+    target_id: uuid.UUID
+    edge_type: str
+    evidence_type: str
+    confidence: float
+
+
+class ConceptDetail(BaseModel):
+    """Full concept with edges and impact profile for the detail endpoint."""
+
+    id: uuid.UUID
+    name: str
+    description: str
+    labels: list[str]
+    confidence: float
+    created_by: str
+    verified_by: Optional[str]
+    last_verified: Optional[str]
+    impact_profile: Optional[Any]
+    created_at: str
+    updated_at: str
+    edges: list[EdgeSummary]
 
 
 class CytoscapeNodeData(BaseModel):
+    """Cytoscape node data bag: id, label, type."""
+
     id: str
     label: str
     type: str
 
 
 class CytoscapeNode(BaseModel):
+    """Cytoscape node element."""
+
     data: CytoscapeNodeData
 
 
 class CytoscapeEdgeData(BaseModel):
+    """Cytoscape edge data bag: id, source, target, weight."""
+
     id: str
     source: str
     target: str
@@ -34,23 +73,53 @@ class CytoscapeEdgeData(BaseModel):
 
 
 class CytoscapeEdge(BaseModel):
+    """Cytoscape edge element."""
+
     data: CytoscapeEdgeData
 
 
 class GraphResponse(BaseModel):
-    """Cytoscape-compatible graph payload."""
+    """Subgraph in Cytoscape-compatible format (from AP-97 spike decision)."""
 
     nodes: list[CytoscapeNode]
     edges: list[CytoscapeEdge]
 
 
+class ActivityItem(BaseModel):
+    """A single work item representing one librarian iteration."""
+
+    id: uuid.UUID
+    item_type: str
+    concept_id: uuid.UUID
+    description: str
+    file_path: Optional[str]
+    created_at: str
+    resolved_at: Optional[str]
+    failure_count: int
+    escalated: bool
+    resolved: bool
+
+
+class HealthMetrics(BaseModel):
+    """Current values for the three quality metrics."""
+
+    coverage: float
+    freshness: float
+    blast_radius_completeness: float
+
+
+class HealthTargets(BaseModel):
+    """Configured target thresholds for the three quality metrics."""
+
+    coverage_target: float
+    freshness_target: float
+    blast_radius_target: float
+
+
 class HealthResponse(BaseModel):
-    """Health dashboard payload."""
+    """Dashboard payload: metrics, targets, effective weights, queue depth."""
 
-    metrics: dict[str, float]
-    targets: dict[str, float]
+    metrics: HealthMetrics
+    targets: HealthTargets
     effective_weights: dict[str, float]
-    queue_depth: int
-
-
-ActivityResponse = list[WorkItem]
+    work_queue_depth: int

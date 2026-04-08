@@ -20,6 +20,8 @@ dependencies = [
     "tree-sitter-python>=0.21",
     "tree-sitter-typescript>=0.21",
     "pathspec>=0.12",
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
 ]
 
 [project.scripts]
