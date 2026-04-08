@@ -43,6 +43,7 @@ class CodeReference(BaseModel):
     content_hash: str  # SHA-256 of the referenced code block, 64-char hex
     semantic_anchor: str
     derived_from_code_version: Optional[str] = None  # 40-char git commit hash
+    is_unresolved: bool = False  # True when all repair chain steps have failed
 
     @field_validator("content_hash")
     @classmethod
