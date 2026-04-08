@@ -15,9 +15,9 @@ import tree_sitter_python as _tspython
 from tree_sitter import Language, Node, Parser
 
 from apriori.structural.models import (
-    ClassDef,
-    FunctionDef,
-    Parameter,
+    ClassEntity,
+    FunctionEntity,
+    FunctionParam,
     ParseResult,
     Relationship,
 )
@@ -50,17 +50,17 @@ def _collect_parse_errors(node: Node) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Parameter extraction
+# FunctionParam extraction
 # ---------------------------------------------------------------------------
 
 
-def _extract_parameters(params_node: Node) -> list[Parameter]:
+def _extract_parameters(params_node: Node) -> list[FunctionParam]:
     """Extract parameters from a tree-sitter ``parameters`` node."""
-    result: list[Parameter] = []
+    result: list[FunctionParam] = []
     for child in params_node.named_children:
         if child.type == "identifier":
             # Simple untyped parameter (incl. `self`, `cls`)
-            result.append(Parameter(name=child.text.decode("utf-8")))
+            result.append(FunctionParam(name=child.text.decode("utf-8")))
         elif child.type == "typed_parameter":
             # typed_parameter: first identifier child is the name;
             # child_by_field_name("type") gives the type annotation.
@@ -70,7 +70,7 @@ def _extract_parameters(params_node: Node) -> list[Parameter]:
             type_node = child.child_by_field_name("type")
             if name_node:
                 result.append(
-                    Parameter(
+                    FunctionParam(
                         name=name_node.text.decode("utf-8"),
                         type_annotation=(
                             type_node.text.decode("utf-8") if type_node else None
@@ -82,7 +82,7 @@ def _extract_parameters(params_node: Node) -> list[Parameter]:
             type_node = child.child_by_field_name("type")
             if name_node:
                 result.append(
-                    Parameter(
+                    FunctionParam(
                         name=name_node.text.decode("utf-8"),
                         type_annotation=(
                             type_node.text.decode("utf-8") if type_node else None
@@ -95,7 +95,7 @@ def _extract_parameters(params_node: Node) -> list[Parameter]:
                 (c for c in child.children if c.type == "identifier"), None
             )
             if inner:
-                result.append(Parameter(name=child.text.decode("utf-8")))
+                result.append(FunctionParam(name=child.text.decode("utf-8")))
     return result
 
 
@@ -104,8 +104,8 @@ def _extract_parameters(params_node: Node) -> list[Parameter]:
 # ---------------------------------------------------------------------------
 
 
-def _extract_function(node: Node, file_path: Path) -> FunctionDef:
-    """Extract a FunctionDef from a function_definition or
+def _extract_function(node: Node, file_path: Path) -> FunctionEntity:
+    """Extract a FunctionEntity from a function_definition or
     async_function_definition node."""
     name_node = node.child_by_field_name("name")
     params_node = node.child_by_field_name("parameters")
@@ -118,10 +118,10 @@ def _extract_function(node: Node, file_path: Path) -> FunctionDef:
         return_node.text.decode("utf-8") if return_node else None
     )
 
-    return FunctionDef(
+    return FunctionEntity(
         name=name,
-        parameters=parameters,
-        return_annotation=return_annotation,
+        params=parameters,
+        return_type=return_annotation,
         start_line=node.start_point.row + 1,  # 1-based
         end_line=node.end_point.row + 1,
         file_path=file_path,
@@ -136,8 +136,8 @@ def _extract_function(node: Node, file_path: Path) -> FunctionDef:
 
 def _extract_class(
     node: Node, file_path: Path
-) -> tuple[ClassDef, list[Relationship]]:
-    """Extract a ClassDef and its inherits Relationships from a
+) -> tuple[ClassEntity, list[Relationship]]:
+    """Extract a ClassEntity and its inherits Relationships from a
     class_definition node."""
     name_node = node.child_by_field_name("name")
     class_name = name_node.text.decode("utf-8") if name_node else "<unknown>"
@@ -151,7 +151,7 @@ def _extract_class(
                 base_classes.append(child.text.decode("utf-8"))
 
     # Methods in the class body
-    methods: list[FunctionDef] = []
+    methods: list[FunctionEntity] = []
     body_node = node.child_by_field_name("body")
     if body_node:
         for child in body_node.children:
@@ -162,9 +162,9 @@ def _extract_class(
                 if definition and definition.type in _FUNC_NODE_TYPES:
                     methods.append(_extract_function(definition, file_path))
 
-    cls = ClassDef(
+    cls = ClassEntity(
         name=class_name,
-        base_classes=base_classes,
+        bases=base_classes,
         methods=methods,
         start_line=node.start_point.row + 1,
         end_line=node.end_point.row + 1,
@@ -279,8 +279,8 @@ def _collect_calls(node: Node, file_path: Path, relationships: list[Relationship
 def _walk_module(
     module_node: Node,
     file_path: Path,
-    functions: list[FunctionDef],
-    classes: list[ClassDef],
+    functions: list[FunctionEntity],
+    classes: list[ClassEntity],
     relationships: list[Relationship],
 ) -> None:
     """Walk top-level children for functions/classes; collect imports/calls from
@@ -338,8 +338,8 @@ class PythonParser:
         tree = parser.parse(source)
         errors = _collect_parse_errors(tree.root_node)
 
-        functions: list[FunctionDef] = []
-        classes: list[ClassDef] = []
+        functions: list[FunctionEntity] = []
+        classes: list[ClassEntity] = []
         relationships: list[Relationship] = []
 
         _walk_module(tree.root_node, file_path, functions, classes, relationships)
