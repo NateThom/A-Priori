@@ -1,0 +1,36 @@
+{
+  "metadata": {
+    "fixture_id": "bad_05_referential_integrity",
+    "description": "Edge references a target concept ('DatabaseAdapter') that does not appear in the concepts list. Only 'UserRepository' is defined. Fails the referential_integrity Level 1 check.",
+    "expected_result": "fail",
+    "checks_that_pass": [
+      "schema_parseable",
+      "description_non_empty",
+      "description_non_generic",
+      "confidence_in_range",
+      "edge_type_valid"
+    ],
+    "checks_that_fail": [
+      "referential_integrity"
+    ]
+  },
+  "librarian_output": {
+    "concepts": [
+      {
+        "name": "UserRepository",
+        "description": "Provides CRUD operations for user profile records stored in Supabase, translating between the Supabase SDK response format and the internal UserProfile Pydantic model. Enforces row-level security by always scoping queries to the authenticated user's ID.",
+        "confidence": 0.78,
+        "code_references": []
+      }
+    ],
+    "edges": [
+      {
+        "source_name": "UserRepository",
+        "target_name": "DatabaseAdapter",
+        "edge_type": "depends-on",
+        "confidence": 0.80,
+        "evidence_type": "semantic"
+      }
+    ]
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "fixture_id": "bad_03_generic_description_01",
+    "description": "Concept with a generic, boilerplate one-liner that provides no specific insight (classic LLM hallucination pattern: restates the class name with no substance). Fails the description_non_generic Level 1 check.",
+    "expected_result": "fail",
+    "checks_that_pass": [
+      "schema_parseable",
+      "description_non_empty",
+      "confidence_in_range",
+      "edge_type_valid",
+      "referential_integrity"
+    ],
+    "checks_that_fail": [
+      "description_non_generic"
+    ]
+  },
+  "librarian_output": {
+    "concepts": [
+      {
+        "name": "UserService",
+        "description": "This class handles user-related operations and provides methods for managing users.",
+        "confidence": 0.50,
+        "code_references": []
+      }
+    ],
+    "edges": []
+  }
+}

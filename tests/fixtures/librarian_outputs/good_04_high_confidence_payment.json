@@ -1,0 +1,55 @@
+{
+  "metadata": {
+    "fixture_id": "good_04_high_confidence_payment",
+    "description": "PaymentProcessor and RefundService with high-confidence analysis (0.91-0.95). Multiple edge types used. All Level 1 checks pass.",
+    "expected_result": "pass",
+    "checks_that_pass": [
+      "schema_parseable",
+      "description_non_empty",
+      "description_non_generic",
+      "confidence_in_range",
+      "edge_type_valid",
+      "referential_integrity"
+    ],
+    "checks_that_fail": []
+  },
+  "librarian_output": {
+    "concepts": [
+      {
+        "name": "PaymentProcessor",
+        "description": "Orchestrates payment transactions by building a charge request from the order total and currency, submitting it to the Stripe API with a unique idempotency key derived from the order ID, and publishing a payment.completed or payment.failed event to the internal event bus for downstream analytics and fulfilment services.",
+        "confidence": 0.95,
+        "code_references": [
+          {
+            "symbol": "PaymentProcessor",
+            "file_path": "src/billing/payment_processor.py",
+            "line_range": [12, 68],
+            "semantic_anchor": "class PaymentProcessor orchestrates Stripe charge flow"
+          }
+        ]
+      },
+      {
+        "name": "RefundService",
+        "description": "Handles refund computation by verifying the original transaction falls within the 14-day refund window, calculating partial refund amounts for pro-rated subscriptions, and invoking the Stripe Refund endpoint with idempotency keys to prevent duplicate refunds on retried requests.",
+        "confidence": 0.91,
+        "code_references": [
+          {
+            "symbol": "RefundService",
+            "file_path": "src/billing/refund_service.py",
+            "line_range": [8, 55],
+            "semantic_anchor": "class RefundService validates and executes Stripe refunds"
+          }
+        ]
+      }
+    ],
+    "edges": [
+      {
+        "source_name": "PaymentProcessor",
+        "target_name": "RefundService",
+        "edge_type": "depends-on",
+        "confidence": 0.92,
+        "evidence_type": "semantic"
+      }
+    ]
+  }
+}

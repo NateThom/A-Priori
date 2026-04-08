@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "fixture_id": "bad_02_whitespace_description",
+    "description": "Concept with a whitespace-only description (spaces and tabs). Fails the description_non_empty Level 1 check.",
+    "expected_result": "fail",
+    "checks_that_pass": [
+      "schema_parseable",
+      "description_non_generic",
+      "confidence_in_range",
+      "edge_type_valid",
+      "referential_integrity"
+    ],
+    "checks_that_fail": [
+      "description_non_empty"
+    ]
+  },
+  "librarian_output": {
+    "concepts": [
+      {
+        "name": "ConfigLoader",
+        "description": "   \t   ",
+        "confidence": 0.60,
+        "code_references": []
+      }
+    ],
+    "edges": []
+  }
+}
