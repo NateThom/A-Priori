@@ -22,17 +22,8 @@ from pydantic import BaseModel
 from apriori.models.concept import Concept, CodeReference
 from apriori.models.edge import Edge
 from apriori.storage.protocol import KnowledgeStore
+from apriori.structural.fqn import module_fqn, symbol_fqn
 from apriori.structural.models import FunctionEntity, ParseResult
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_fqn(file_path: Path, *parts: str) -> str:
-    """Return a fully-qualified symbol name: ``str(file_path)::part1::part2``."""
-    return str(file_path) + "::" + "::".join(parts)
 
 
 def _content_hash(source: bytes, start_line: int, end_line: int) -> str:
@@ -145,8 +136,26 @@ class GraphBuilder:
         existing: dict[str, Concept],
         stats: GraphBuildResult,
     ) -> None:
+        module_name = module_fqn(result.file_path)
+        module_end_line = max(1, len(result.source.splitlines()))
+        module_metadata = {"language": result.language}
+        module_concept, module_created = self._upsert_concept(
+            module_name,
+            result,
+            1,
+            module_end_line,
+            "module",
+            module_metadata,
+            existing,
+        )
+        existing[module_name] = module_concept
+        if module_created:
+            stats.concepts_created += 1
+        else:
+            stats.concepts_updated += 1
+
         for func in result.functions:
-            fqn = _make_fqn(result.file_path, func.name)
+            fqn = symbol_fqn(result.file_path, func.name)
             concept, created = self._upsert_concept(
                 fqn, result, func.start_line, func.end_line, "function",
                 _function_metadata(func), existing,
@@ -158,7 +167,7 @@ class GraphBuilder:
                 stats.concepts_updated += 1
 
         for cls in result.classes:
-            fqn = _make_fqn(result.file_path, cls.name)
+            fqn = symbol_fqn(result.file_path, cls.name)
             metadata = {"bases": cls.bases, "is_exported": cls.is_exported}
             concept, created = self._upsert_concept(
                 fqn, result, cls.start_line, cls.end_line, "class", metadata, existing,
@@ -171,7 +180,7 @@ class GraphBuilder:
 
             # Methods nested in the class become their own concept nodes.
             for method in cls.methods:
-                method_fqn = _make_fqn(result.file_path, cls.name, method.name)
+                method_fqn = symbol_fqn(result.file_path, cls.name, method.name)
                 m_concept, m_created = self._upsert_concept(
                     method_fqn, result, method.start_line, method.end_line, "method",
                     _function_metadata(method), existing,
@@ -183,7 +192,7 @@ class GraphBuilder:
                     stats.concepts_updated += 1
 
         for iface in result.interfaces:
-            fqn = _make_fqn(result.file_path, iface.name)
+            fqn = symbol_fqn(result.file_path, iface.name)
             metadata = {"is_exported": iface.is_exported}
             concept, created = self._upsert_concept(
                 fqn, result, iface.start_line, iface.end_line, "interface", metadata, existing,
@@ -264,8 +273,37 @@ class GraphBuilder:
         existing_edge_keys: set[tuple[uuid.UUID, uuid.UUID, str]],
         stats: GraphBuildResult,
     ) -> None:
+        module_concept = existing.get(module_fqn(result.file_path))
+        if module_concept is not None:
+            self._remove_existing_import_edges_for_module(
+                module_concept.id, existing_edge_keys
+            )
+
         # Edges from ParseResult.relationships (Python parser and others).
         for rel in result.relationships:
+            if rel.kind == "imports":
+                if module_concept is None:
+                    stats.edges_skipped += 1
+                    continue
+                target_concept = self._resolve_import_target(
+                    rel.target, rel.file_path, existing, simple_to_fqns
+                )
+                if target_concept is None:
+                    stats.edges_skipped += 1
+                    continue
+
+                key = (module_concept.id, target_concept.id, "imports")
+                if key in existing_edge_keys:
+                    stats.edges_skipped += 1
+                    continue
+
+                self._emit_edge(
+                    module_concept.id, target_concept.id, "imports",
+                    existing_edge_keys,
+                )
+                stats.edges_created += 1
+                continue
+
             if rel.kind not in ("calls", "inherits"):
                 continue
             if not rel.source:
@@ -273,8 +311,8 @@ class GraphBuilder:
                 stats.edges_skipped += 1
                 continue
 
-            source_fqn = _make_fqn(rel.file_path, rel.source)
-            target_fqn = _make_fqn(rel.file_path, rel.target)
+            source_fqn = symbol_fqn(rel.file_path, rel.source)
+            target_fqn = symbol_fqn(rel.file_path, rel.target)
 
             source_concept = existing.get(source_fqn)
             target_concept = existing.get(target_fqn)
@@ -294,11 +332,34 @@ class GraphBuilder:
             )
             stats.edges_created += 1
 
+        # Edges from ParseResult.imports (TypeScript parser).
+        if module_concept is not None:
+            for imp in result.imports:
+                targets = imp.names if imp.names else [imp.source_module]
+                for target_name in targets:
+                    target_concept = self._resolve_import_target(
+                        target_name, result.file_path, existing, simple_to_fqns
+                    )
+                    if target_concept is None:
+                        stats.edges_skipped += 1
+                        continue
+
+                    key = (module_concept.id, target_concept.id, "imports")
+                    if key in existing_edge_keys:
+                        stats.edges_skipped += 1
+                        continue
+
+                    self._emit_edge(
+                        module_concept.id, target_concept.id, "imports",
+                        existing_edge_keys,
+                    )
+                    stats.edges_created += 1
+
         # ClassEntity.bases — handles TypeScript inheritance (no Relationship objects).
         # Python parser also sets bases but also emits Relationship(kind="inherits"),
         # so the existing_edge_keys guard prevents double-creation.
         for cls in result.classes:
-            class_fqn = _make_fqn(result.file_path, cls.name)
+            class_fqn = symbol_fqn(result.file_path, cls.name)
             class_concept = existing.get(class_fqn)
             if class_concept is None:
                 continue
@@ -330,7 +391,7 @@ class GraphBuilder:
         simple_to_fqns: dict[str, list[str]],
     ) -> Optional[Concept]:
         """Resolve a base class name to a Concept, trying local FQN then simple name."""
-        local_fqn = _make_fqn(file_path, base_name)
+        local_fqn = symbol_fqn(file_path, base_name)
         if local_fqn in existing:
             return existing[local_fqn]
         # If the base is defined in a different file, fall back to simple name.
@@ -338,6 +399,47 @@ class GraphBuilder:
         if len(fqns) == 1:
             return existing.get(fqns[0])
         return None
+
+    def _resolve_import_target(
+        self,
+        target_name: str,
+        file_path: Path,
+        existing: dict[str, Concept],
+        simple_to_fqns: dict[str, list[str]],
+    ) -> Optional[Concept]:
+        """Resolve an import target to a Concept.
+
+        Order:
+        1. Local symbol FQN in the same file
+        2. Exact concept name match (supports external/module placeholders)
+        3. Unique simple-name match in the graph
+        """
+        local_fqn = symbol_fqn(file_path, target_name)
+        if local_fqn in existing:
+            return existing[local_fqn]
+
+        direct = existing.get(target_name)
+        if direct is not None:
+            return direct
+
+        fqns = simple_to_fqns.get(target_name, [])
+        if len(fqns) == 1:
+            return existing.get(fqns[0])
+
+        return None
+
+    def _remove_existing_import_edges_for_module(
+        self,
+        module_concept_id: uuid.UUID,
+        existing_edge_keys: set[tuple[uuid.UUID, uuid.UUID, str]],
+    ) -> None:
+        """Remove all current imports edges sourced from the module concept."""
+        existing_imports = self._store.list_edges(
+            source_id=module_concept_id, edge_type="imports"
+        )
+        for edge in existing_imports:
+            self._store.delete_edge(edge.id)
+            existing_edge_keys.discard((edge.source_id, edge.target_id, edge.edge_type))
 
     def _emit_edge(
         self,
