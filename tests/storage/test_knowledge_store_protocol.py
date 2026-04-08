@@ -161,6 +161,14 @@ class _InMemoryStore:
     def get_pending_work_items(self) -> list[WorkItem]:
         return [wi for wi in self._work_items.values() if not wi.resolved]
 
+    def list_work_items(self, limit: int = 20) -> list[WorkItem]:
+        items = sorted(
+            self._work_items.values(),
+            key=lambda wi: wi.created_at,
+            reverse=True,
+        )
+        return items[:limit]
+
     def record_failure(self, work_item_id: uuid.UUID, record: FailureRecord) -> WorkItem:
         wi = self._work_items[work_item_id]
         updated = wi.model_copy(
@@ -368,6 +376,7 @@ REQUIRED_METHODS = {
     "update_work_item",
     "resolve_work_item",
     "get_pending_work_items",
+    "list_work_items",
     "record_failure",
     "escalate_work_item",
     "get_escalated_items",

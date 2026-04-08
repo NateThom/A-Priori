@@ -291,6 +291,21 @@ class KnowledgeStore(Protocol):
         """
         ...
 
+    def list_work_items(self, limit: int = 20) -> list[WorkItem]:
+        """Return the most recent WorkItems ordered by ``created_at`` descending.
+
+        Used by the activity feed in the UI to display the most recent librarian
+        iterations regardless of resolution status.
+
+        Args:
+            limit: Maximum number of items to return. Defaults to 20.
+
+        Returns:
+            Up to ``limit`` WorkItems ordered by ``created_at`` descending (newest
+            first). Returns an empty list when no WorkItems exist.
+        """
+        ...
+
     def record_failure(
         self, work_item_id: uuid.UUID, record: FailureRecord
     ) -> WorkItem:

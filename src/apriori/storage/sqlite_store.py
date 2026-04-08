@@ -661,6 +661,15 @@ class SQLiteStore:
         ).fetchall()
         return [self._row_to_work_item(r) for r in rows]
 
+    def list_work_items(self, limit: int = 20) -> list[WorkItem]:
+        """Return the most recent WorkItems ordered by created_at descending."""
+        conn = self._get_connection()
+        rows = conn.execute(
+            "SELECT * FROM work_items ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [self._row_to_work_item(r) for r in rows]
+
     def record_failure(
         self, work_item_id: uuid.UUID, record: FailureRecord
     ) -> WorkItem:
