@@ -1,4 +1,4 @@
-"""MCP server for A-Priori (AP-68 scaffold; AP-70 read tools; ERD §3.4).
+"""MCP server for A-Priori (AP-68 scaffold; AP-70 read tools; AP-72 write tools; ERD §3.4).
 
 Thin shell using FastMCP. All business logic lives in core apriori modules
 (arch:mcp-thin-shell, arch:core-lib-thin-shells). Tool functions are plain
@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import functools
 import logging
-import uuid as _uuid
+import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Optional
 
@@ -26,6 +27,9 @@ from mcp.server.fastmcp.exceptions import ToolError
 
 from apriori.config import load_config
 from apriori.embedding.protocol import EmbeddingServiceProtocol
+from apriori.models.concept import Concept
+from apriori.models.edge import Edge, EdgeTypeVocabulary, load_edge_vocabulary
+from apriori.models.work_item import WorkItem
 from apriori.storage.dual_writer import DualWriter
 from apriori.storage.protocol import KnowledgeStore
 from apriori.storage.sqlite_store import SQLiteStore
@@ -40,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 _store: Optional[KnowledgeStore] = None
 _embedding_service: Optional[EmbeddingServiceProtocol] = None
+_edge_vocabulary: Optional[EdgeTypeVocabulary] = None
 
 
 def _get_store() -> KnowledgeStore:
@@ -56,6 +61,13 @@ def _get_embedding_service() -> EmbeddingServiceProtocol:
         from apriori.embedding.service import EmbeddingService  # heavy import
         _embedding_service = EmbeddingService()
     return _embedding_service
+
+
+def _get_edge_vocabulary() -> EdgeTypeVocabulary:
+    """Return the active EdgeTypeVocabulary, or raise ToolError if not set."""
+    if _edge_vocabulary is None:
+        raise ToolError("Edge vocabulary not initialized — is the MCP server running?")
+    return _edge_vocabulary
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +114,9 @@ def build_lifespan(
     """Return a FastMCP lifespan context manager factory.
 
     Reads storage paths from config when not explicitly supplied. Used directly
-    by the server (default paths) and by tests (injected tmp_path).
+    by the server (default paths) and by tests (injected tmp_path). Sets the
+    module-level ``_store``, ``_embedding_service``, and ``_edge_vocabulary``
+    on entry and clears them on exit.
 
     Args:
         db_path: Override for the SQLite database path.
@@ -115,7 +129,7 @@ def build_lifespan(
 
     @asynccontextmanager
     async def lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
-        global _store, _embedding_service
+        global _store, _embedding_service, _edge_vocabulary
 
         config = load_config()
 
@@ -133,12 +147,14 @@ def build_lifespan(
 
         _store = store
         _embedding_service = None  # loaded lazily on first semantic search
+        _edge_vocabulary = load_edge_vocabulary(config)
 
         try:
             yield {"store": store}
         finally:
             _store = None
             _embedding_service = None
+            _edge_vocabulary = None
             logger.info("MCP server shutting down — KnowledgeStore released")
 
     return lifespan
@@ -193,25 +209,36 @@ def search(query: str, mode: str = "keyword", limit: int = 10) -> list:
 
 @mcp.tool()
 @safe_tool
-def traverse(concept_id: str, max_hops: int = 3) -> list:
+def traverse(concept_id: str, max_hops: int = 3) -> dict:
     """Breadth-first traversal of the knowledge graph from a starting concept.
 
     Follows outgoing edges and returns all reachable concepts up to ``max_hops``
-    edges from the starting concept (inclusive).
+    edges from the starting concept, along with the connecting edges between them.
 
     Args:
         concept_id: UUID string of the starting concept.
         max_hops: Maximum number of edge hops to follow (default 3).
 
     Returns:
-        List of concept dicts reachable within ``max_hops`` edges, in BFS order.
+        Dict with ``concepts`` (list of concept dicts in BFS order) and
+        ``edges`` (list of edge dicts connecting those concepts).
     """
     store = _get_store()
     concepts = store.traverse_graph(
-        start_id=_uuid.UUID(concept_id),
+        start_id=uuid.UUID(concept_id),
         max_depth=max_hops,
     )
-    return [c.model_dump(mode="json") for c in concepts]
+    concept_ids = {c.id for c in concepts}
+    edges = [
+        e
+        for cid in concept_ids
+        for e in store.list_edges(source_id=cid)
+        if e.target_id in concept_ids
+    ]
+    return {
+        "concepts": [c.model_dump(mode="json") for c in concepts],
+        "edges": [e.model_dump(mode="json") for e in edges],
+    }
 
 
 @mcp.tool()
@@ -233,7 +260,7 @@ def get_concept(concept_id: str) -> dict:
         ToolError: If the concept does not exist.
     """
     store = _get_store()
-    cid = _uuid.UUID(concept_id)
+    cid = uuid.UUID(concept_id)
     concept = store.get_concept(cid)
     if concept is None:
         raise ToolError(f"Concept not found: {concept_id}")
@@ -363,7 +390,7 @@ def get_neighbors(
     return [
         c.model_dump(mode="json")
         for c in _get_store().get_neighbors(
-            concept_id=_uuid.UUID(concept_id),
+            concept_id=uuid.UUID(concept_id),
             edge_type=edge_type,
             direction=direction,
         )
@@ -397,7 +424,7 @@ def get_edge(edge_id: str) -> dict:
         ToolError: If the edge does not exist.
     """
     store = _get_store()
-    edge = store.get_edge(_uuid.UUID(edge_id))
+    edge = store.get_edge(uuid.UUID(edge_id))
     if edge is None:
         raise ToolError(f"Edge not found: {edge_id}")
     return edge.model_dump(mode="json")
@@ -425,15 +452,15 @@ def list_edges(
     return [
         e.model_dump(mode="json")
         for e in _get_store().list_edges(
-            source_id=_uuid.UUID(source_id) if source_id else None,
-            target_id=_uuid.UUID(target_id) if target_id else None,
+            source_id=uuid.UUID(source_id) if source_id else None,
+            target_id=uuid.UUID(target_id) if target_id else None,
             edge_type=edge_type,
         )
     ]
 
 
 # ---------------------------------------------------------------------------
-# Write tools — Story 4.3 (stubs)
+# Write tools — Story 4.3 (AP-72)
 # ---------------------------------------------------------------------------
 
 
@@ -446,6 +473,9 @@ def create_concept(
 ) -> dict:
     """Create a new Concept in the knowledge graph.
 
+    Writes to both SQLite (runtime index) and YAML (authoritative backup) via
+    the DualWriter (arch:sqlite-vec-storage).
+
     Args:
         name: Human-readable concept name (must be unique).
         description: Full description of the concept.
@@ -454,7 +484,15 @@ def create_concept(
     Returns:
         The created concept dict including its assigned UUID.
     """
-    raise NotImplementedError("Implemented in Story 4.3")
+    store = _get_store()
+    concept = Concept(
+        name=name,
+        description=description,
+        labels=set(labels) if labels else set(),
+        created_by="human",
+    )
+    result = store.create_concept(concept)
+    return result.model_dump(mode="json")
 
 
 @mcp.tool()
@@ -478,7 +516,21 @@ def update_concept(
     Returns:
         The updated concept dict.
     """
-    raise NotImplementedError("Implemented in Story 4.3")
+    store = _get_store()
+    cid = uuid.UUID(concept_id)
+    existing = store.get_concept(cid)
+    if existing is None:
+        raise ToolError(f"Concept '{concept_id}' not found")
+    updates: dict[str, Any] = {"updated_at": datetime.now(timezone.utc)}
+    if name is not None:
+        updates["name"] = name
+    if description is not None:
+        updates["description"] = description
+    if labels is not None:
+        updates["labels"] = set(labels)
+    updated = existing.model_copy(update=updates)
+    result = store.update_concept(updated)
+    return result.model_dump(mode="json")
 
 
 @mcp.tool()
@@ -492,7 +544,13 @@ def delete_concept(concept_id: str) -> str:
     Returns:
         Confirmation message including the deleted concept ID.
     """
-    raise NotImplementedError("Implemented in Story 4.3")
+    store = _get_store()
+    cid = uuid.UUID(concept_id)
+    existing = store.get_concept(cid)
+    if existing is None:
+        raise ToolError(f"Concept '{concept_id}' not found")
+    store.delete_concept(cid)
+    return f"Concept '{concept_id}' deleted successfully."
 
 
 @mcp.tool()
@@ -505,6 +563,9 @@ def create_edge(
 ) -> dict:
     """Create a directed Edge between two Concepts in the knowledge graph.
 
+    The edge type must belong to the configured vocabulary. Writes to both
+    SQLite and YAML via the DualWriter (arch:sqlite-vec-storage).
+
     Args:
         source_id: UUID string of the source concept.
         target_id: UUID string of the target concept.
@@ -514,7 +575,65 @@ def create_edge(
     Returns:
         The created edge dict including its assigned UUID.
     """
-    raise NotImplementedError("Implemented in Story 4.3")
+    store = _get_store()
+    vocab = _get_edge_vocabulary()
+    try:
+        vocab.validate(edge_type)
+    except ValueError as exc:
+        raise ToolError(str(exc))
+    metadata = {"rationale": rationale} if rationale else None
+    edge = Edge(
+        source_id=uuid.UUID(source_id),
+        target_id=uuid.UUID(target_id),
+        edge_type=edge_type,
+        evidence_type="semantic",
+        metadata=metadata,
+    )
+    result = store.create_edge(edge)
+    return result.model_dump(mode="json")
+
+
+@mcp.tool()
+@safe_tool
+def update_edge(
+    edge_id: str,
+    edge_type: Optional[str] = None,
+    confidence: Optional[float] = None,
+    metadata: Optional[dict] = None,
+) -> dict:
+    """Update an existing Edge in the knowledge graph.
+
+    Provide only the fields to change; omitted fields are left unchanged.
+
+    Args:
+        edge_id: UUID string of the edge to update.
+        edge_type: New edge type from the configured vocabulary (optional).
+        confidence: New confidence score between 0.0 and 1.0 (optional).
+        metadata: Replacement metadata dict (optional).
+
+    Returns:
+        The updated edge dict.
+    """
+    store = _get_store()
+    eid = uuid.UUID(edge_id)
+    existing = store.get_edge(eid)
+    if existing is None:
+        raise ToolError(f"Edge '{edge_id}' not found")
+    updates: dict[str, Any] = {"updated_at": datetime.now(timezone.utc)}
+    if edge_type is not None:
+        vocab = _get_edge_vocabulary()
+        try:
+            vocab.validate(edge_type)
+        except ValueError as exc:
+            raise ToolError(str(exc))
+        updates["edge_type"] = edge_type
+    if confidence is not None:
+        updates["confidence"] = confidence
+    if metadata is not None:
+        updates["metadata"] = metadata
+    updated = existing.model_copy(update=updates)
+    result = store.update_edge(updated)
+    return result.model_dump(mode="json")
 
 
 @mcp.tool()
@@ -528,7 +647,52 @@ def delete_edge(edge_id: str) -> str:
     Returns:
         Confirmation message including the deleted edge ID.
     """
-    raise NotImplementedError("Implemented in Story 4.3")
+    store = _get_store()
+    eid = uuid.UUID(edge_id)
+    existing = store.get_edge(eid)
+    if existing is None:
+        raise ToolError(f"Edge '{edge_id}' not found")
+    store.delete_edge(eid)
+    return f"Edge '{edge_id}' deleted successfully."
+
+
+@mcp.tool()
+@safe_tool
+def report_gap(description: str, context: Optional[str] = None) -> dict:
+    """Report a knowledge gap for the librarian to investigate.
+
+    Creates a placeholder Concept (with label ``auto-generated``) and a
+    ``reported_gap`` WorkItem referencing it. The librarian will pick up
+    the work item and investigate the gap.
+
+    Args:
+        description: Description of the missing or incomplete knowledge.
+        context: Optional additional context that helps scope the investigation.
+
+    Returns:
+        The created WorkItem dict including its assigned UUID.
+    """
+    store = _get_store()
+    full_description = description
+    if context:
+        full_description = f"{description}\n\nContext: {context}"
+
+    # A gap concept is a placeholder that will be enriched by the librarian.
+    gap_concept = Concept(
+        name=f"[Gap] {description[:80]}",
+        description=full_description,
+        labels={"auto-generated", "needs-review"},
+        created_by="human",
+    )
+    created_concept = store.create_concept(gap_concept)
+
+    work_item = WorkItem(
+        item_type="reported_gap",
+        concept_id=created_concept.id,
+        description=full_description,
+    )
+    result = store.create_work_item(work_item)
+    return result.model_dump(mode="json")
 
 
 # ---------------------------------------------------------------------------

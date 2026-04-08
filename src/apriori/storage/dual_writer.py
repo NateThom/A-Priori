@@ -292,6 +292,15 @@ class DualWriter:
     def get_metrics(self) -> dict[str, Any]:
         return self._sqlite.get_metrics()
 
+    def count_covered_files(self) -> int:
+        return self._sqlite.count_covered_files()
+
+    def count_fresh_active_concepts(self, active_days: int = 30) -> tuple[int, int]:
+        return self._sqlite.count_fresh_active_concepts(active_days)
+
+    def count_blast_radius_complete(self) -> tuple[int, int]:
+        return self._sqlite.count_blast_radius_complete()
+
     # -------------------------------------------------------------------------
     # Bulk operations
     # -------------------------------------------------------------------------

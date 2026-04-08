@@ -102,7 +102,7 @@ def test_server_has_main_module():
 
 
 # ---------------------------------------------------------------------------
-# AC2: 13 tools registered with names, descriptions, and input schemas
+# AC2: Tools registered with names, descriptions, and input schemas
 # ---------------------------------------------------------------------------
 
 
@@ -110,12 +110,12 @@ def test_server_registers_expected_tool_count():
     """Given the server, when tools are listed, the expected number are registered.
 
     AP-68 scaffolded 13 tools. AP-70 added 5 read tools (search, traverse,
-    get_concept→replaced, list_edge_types, get_status, blast_radius) for a
-    total of 18.
+    list_edge_types, get_status, blast_radius) and AP-72 added report_gap for
+    a total of 20.
     """
     tools = asyncio.run(mcp.list_tools())
-    assert len(tools) == 18, (
-        f"Expected 18 tools, got {len(tools)}: {[t.name for t in tools]}"
+    assert len(tools) == 20, (
+        f"Expected 20 tools, got {len(tools)}: {[t.name for t in tools]}"
     )
 
 
@@ -137,16 +137,16 @@ def test_all_tools_have_input_schemas():
 
 
 def test_tool_names_are_unique():
-    """All 13 tool names are distinct."""
+    """All tool names are distinct."""
     tools = asyncio.run(mcp.list_tools())
     names = [t.name for t in tools]
     assert len(names) == len(set(names)), f"Duplicate tool names: {names}"
 
 
 def test_expected_tool_names_present():
-    """All expected tool names are registered (AP-68 + AP-70 additions)."""
+    """All expected tool names are registered (AP-68 + AP-70 + AP-72 additions)."""
     expected = {
-        # Concept CRUD (AP-68 scaffold; bodies in AP-70/AP-73)
+        # Concept CRUD
         "create_concept",
         "get_concept",
         "update_concept",
@@ -155,6 +155,7 @@ def test_expected_tool_names_present():
         # Edge CRUD
         "create_edge",
         "get_edge",
+        "update_edge",
         "delete_edge",
         "list_edges",
         "get_neighbors",
@@ -168,6 +169,8 @@ def test_expected_tool_names_present():
         "list_edge_types",
         "get_status",
         "blast_radius",
+        # Gap reporting (AP-72)
+        "report_gap",
     }
     tools = asyncio.run(mcp.list_tools())
     actual = {t.name for t in tools}

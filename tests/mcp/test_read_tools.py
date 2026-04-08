@@ -94,7 +94,7 @@ def test_search_semantic_returns_concepts_by_vector_similarity(tmp_path: Path) -
     similar concepts ranked by vector similarity."""
 
     class _FixedEmbedding:
-        """Returns a fixed 768-dim vector for any input."""
+        """Returns a fixed 768-dim vector for any input (matches current SQLiteStore._EMBEDDING_DIMS)."""
 
         def generate_embedding(
             self, text: str, text_type: str = "passage"
@@ -180,7 +180,7 @@ def test_search_file_returns_empty_for_no_references(store: SQLiteStore) -> None
 
 def test_traverse_returns_concepts_within_max_hops(store: SQLiteStore) -> None:
     """Given start concept and max_hops=2, traverse returns all concepts within 2 edges
-    but not those 3 hops away."""
+    (with connecting edges) but not those 3 hops away."""
     c_a = store.create_concept(_concept("ConceptA"))
     c_b = store.create_concept(_concept("ConceptB"))
     c_c = store.create_concept(_concept("ConceptC"))
@@ -190,23 +190,31 @@ def test_traverse_returns_concepts_within_max_hops(store: SQLiteStore) -> None:
     store.create_edge(Edge(source_id=c_b.id, target_id=c_c.id, edge_type="calls", evidence_type="structural"))
     store.create_edge(Edge(source_id=c_c.id, target_id=c_d.id, edge_type="calls", evidence_type="structural"))
 
-    results = mcp_server.traverse(str(c_a.id), max_hops=2)
+    result = mcp_server.traverse(str(c_a.id), max_hops=2)
 
-    names = {r["name"] for r in results}
+    assert isinstance(result, dict)
+    assert "concepts" in result
+    assert "edges" in result
+
+    names = {c["name"] for c in result["concepts"]}
     assert "ConceptA" in names
     assert "ConceptB" in names
     assert "ConceptC" in names
     assert "ConceptD" not in names
 
+    assert len(result["edges"]) > 0
+
 
 def test_traverse_returns_only_start_for_isolated_concept(store: SQLiteStore) -> None:
-    """traverse on a concept with no edges returns only the start concept."""
+    """traverse on a concept with no edges returns only the start concept and no edges."""
     c = store.create_concept(_concept("IsolatedConcept"))
 
-    results = mcp_server.traverse(str(c.id), max_hops=3)
+    result = mcp_server.traverse(str(c.id), max_hops=3)
 
-    assert len(results) == 1
-    assert results[0]["name"] == "IsolatedConcept"
+    assert isinstance(result, dict)
+    assert len(result["concepts"]) == 1
+    assert result["concepts"][0]["name"] == "IsolatedConcept"
+    assert result["edges"] == []
 
 
 # ---------------------------------------------------------------------------
