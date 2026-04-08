@@ -39,14 +39,16 @@ DEFAULT_EDGE_TYPES: frozenset[str] = frozenset(
     }
 )
 
-# Default base priority weights (must sum to 1.0)
+# Default base priority weights for the six-factor scoring model (PRD §6.3, ERD §4.3.1).
+# Must sum to 1.0. Custom weights can be specified in apriori.config.yaml under
+# base_priority_weights and will be normalized if they don't sum to 1.0.
 DEFAULT_BASE_PRIORITIES = {
-    "recency": 0.25,
-    "frequency": 0.20,
-    "semantic_relevance": 0.25,
-    "user_interest": 0.15,
-    "code_stability": 0.10,
-    "cross_module_impact": 0.05,
+    "coverage_gap": 0.15,          # gap in file coverage (investigate_file items)
+    "needs_review": 0.20,          # concept labeled needs-review
+    "developer_proximity": 0.25,   # graph distance from recently-modified files (inverted)
+    "git_activity": 0.20,          # normalized commit count over configurable window
+    "staleness": 0.15,             # days since last verification, normalized
+    "failure_urgency": 0.05,       # normalized prior failure count
 }
 
 
