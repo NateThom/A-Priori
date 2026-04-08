@@ -40,12 +40,12 @@ def test_top_level_function_extracted(parser: PythonParser, tmp_path: Path) -> N
     assert len(result.functions) == 1
     func = result.functions[0]
     assert func.name == "greet"
-    assert len(func.parameters) == 2
-    assert func.parameters[0].name == "name"
-    assert func.parameters[0].type_annotation == "str"
-    assert func.parameters[1].name == "age"
-    assert func.parameters[1].type_annotation == "int"
-    assert func.return_annotation == "str"
+    assert len(func.params) == 2
+    assert func.params[0].name == "name"
+    assert func.params[0].type_annotation == "str"
+    assert func.params[1].name == "age"
+    assert func.params[1].type_annotation == "int"
+    assert func.return_type == "str"
     assert func.start_line == 1
     assert func.end_line >= 2
     assert func.file_path == fp
@@ -62,9 +62,9 @@ def test_function_without_type_annotations(parser: PythonParser, tmp_path: Path)
     assert len(result.functions) == 1
     func = result.functions[0]
     assert func.name == "add"
-    assert func.parameters[0].type_annotation is None
-    assert func.parameters[1].type_annotation is None
-    assert func.return_annotation is None
+    assert func.params[0].type_annotation is None
+    assert func.params[1].type_annotation is None
+    assert func.return_type is None
 
 
 def test_multiple_top_level_functions(parser: PythonParser, tmp_path: Path) -> None:
@@ -99,8 +99,8 @@ def test_class_extracted_with_name_and_base_classes(
     assert len(result.classes) == 1
     cls = result.classes[0]
     assert cls.name == "Dog"
-    assert "Animal" in cls.base_classes
-    assert "Mixin" in cls.base_classes
+    assert "Animal" in cls.bases
+    assert "Mixin" in cls.bases
     assert len(cls.methods) == 1
     assert cls.methods[0].name == "bark"
     assert cls.file_path == fp
@@ -125,7 +125,7 @@ def test_class_without_base_classes(parser: PythonParser, tmp_path: Path) -> Non
 
     assert len(result.classes) == 1
     cls = result.classes[0]
-    assert cls.base_classes == []
+    assert cls.bases == []
     inherits = [r for r in result.relationships if r.kind == "inherits"]
     assert len(inherits) == 0
 
@@ -259,7 +259,7 @@ def test_decorated_function_extracted(parser: PythonParser, tmp_path: Path) -> N
     assert len(result.functions) == 1
     func = result.functions[0]
     assert func.name == "value"
-    assert func.return_annotation == "int"
+    assert func.return_type == "int"
 
 
 def test_multiple_decorators_function_extracted(
@@ -294,9 +294,9 @@ def test_async_function_extracted(parser: PythonParser, tmp_path: Path) -> None:
     assert len(result.functions) == 1
     func = result.functions[0]
     assert func.name == "fetch"
-    assert func.parameters[0].name == "url"
-    assert func.parameters[0].type_annotation == "str"
-    assert func.return_annotation == "bytes"
+    assert func.params[0].name == "url"
+    assert func.params[0].type_annotation == "str"
+    assert func.return_type == "bytes"
     assert func.start_line == 1
 
 
@@ -320,9 +320,9 @@ def test_async_and_sync_function_same_structure(
     sf = sync_result.functions[0]
     af = async_result.functions[0]
     assert sf.name == af.name == "run"
-    assert sf.parameters[0].name == af.parameters[0].name
-    assert sf.parameters[0].type_annotation == af.parameters[0].type_annotation
-    assert sf.return_annotation == af.return_annotation
+    assert sf.params[0].name == af.params[0].name
+    assert sf.params[0].type_annotation == af.params[0].type_annotation
+    assert sf.return_type == af.return_type
     assert sf.start_line == af.start_line
 
 

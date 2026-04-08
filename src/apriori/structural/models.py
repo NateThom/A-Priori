@@ -8,34 +8,85 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class Parameter(BaseModel):
-    """A single function/method parameter."""
+class FunctionParam(BaseModel):
+    """A single parameter in a function signature."""
 
     name: str
     type_annotation: str | None = None
 
 
-class FunctionDef(BaseModel):
-    """A function or method definition extracted from source."""
+class FunctionEntity(BaseModel):
+    """A function or arrow-function extracted from source.
+
+    Covers top-level ``function`` declarations, ``const f = () => {}``
+    assignments, and Python ``def``/``async def`` definitions.
+    """
 
     name: str
-    parameters: list[Parameter] = Field(default_factory=list)
-    return_annotation: str | None = None
+    params: list[FunctionParam] = Field(default_factory=list)
+    return_type: str | None = None
     start_line: int
     end_line: int
     file_path: Path
+    is_exported: bool = False
     is_async: bool = False
 
 
-class ClassDef(BaseModel):
-    """A class definition extracted from source."""
+class ClassEntity(BaseModel):
+    """A class extracted from source.
+
+    ``bases`` records the names of extended classes, representing
+    ``inherits`` relationships in the structural graph.
+    ``methods`` holds method definitions for languages that nest them (Python).
+    """
 
     name: str
-    base_classes: list[str] = Field(default_factory=list)
-    methods: list[FunctionDef] = Field(default_factory=list)
+    bases: list[str] = Field(default_factory=list)
+    methods: list[FunctionEntity] = Field(default_factory=list)
     start_line: int
     end_line: int
     file_path: Path
+    is_exported: bool = False
+
+
+class InterfaceEntity(BaseModel):
+    """A TypeScript interface extracted as a structural entity (ERD §3.3.1)."""
+
+    name: str
+    start_line: int
+    end_line: int
+    file_path: Path
+    is_exported: bool = False
+
+
+class ImportRelationship(BaseModel):
+    """An import statement extracted from source.
+
+    ``names`` contains the imported identifiers from ``import { Foo } from …``.
+    For default or namespace imports ``names`` is empty and only
+    ``source_module`` is meaningful.
+    """
+
+    source_module: str
+    names: list[str] = Field(default_factory=list)
+    file_path: Path
+    start_line: int
+
+
+class ReExport(BaseModel):
+    """A re-export statement, tracking barrel-file re-exports.
+
+    ``is_all=True``  → ``export * from '…'``
+    ``is_all=False`` → ``export { Foo } from '…'``
+
+    ``names`` lists the re-exported identifiers when ``is_all=False``.
+    """
+
+    source_module: str
+    names: list[str] = Field(default_factory=list)
+    file_path: Path
+    start_line: int
+    is_all: bool = True
 
 
 class Relationship(BaseModel):
@@ -57,9 +108,8 @@ class Relationship(BaseModel):
 class ParseResult(BaseModel):
     """Result of parsing a single source file via tree-sitter.
 
-    Produced by the Orchestrator (story 3.2) and consumed by language-specific
-    parsers (stories 3.3, 3.4) that extract higher-level constructs from the
-    raw tree.
+    Produced by the Orchestrator (story 3.2) and populated with extracted
+    structural entities by language-specific parsers (stories 3.3, 3.4).
 
     The ``tree`` field holds the tree-sitter Tree object, which is not
     serializable. Callers that need to persist results should work with the
@@ -75,7 +125,10 @@ class ParseResult(BaseModel):
     parse_errors: list[str] = Field(default_factory=list)
     is_valid: bool = True
 
-    # Higher-level entities extracted by language-specific parsers
-    functions: list[FunctionDef] = Field(default_factory=list)
-    classes: list[ClassDef] = Field(default_factory=list)
+    # Structural entities populated by language-specific parsers
+    functions: list[FunctionEntity] = Field(default_factory=list)
+    classes: list[ClassEntity] = Field(default_factory=list)
+    interfaces: list[InterfaceEntity] = Field(default_factory=list)
+    imports: list[ImportRelationship] = Field(default_factory=list)
+    re_exports: list[ReExport] = Field(default_factory=list)
     relationships: list[Relationship] = Field(default_factory=list)
