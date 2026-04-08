@@ -182,6 +182,35 @@ class TestIterationCountLimit:
         assert len(records) == 3
 
     @pytest.mark.asyncio
+    async def test_run_orchestrates_iterations_via_asyncio_gather(
+        self, store: SQLiteStore, config: Config
+    ):
+        """Technical note: run() uses asyncio.gather() for iteration orchestration."""
+        from apriori.librarian.loop import LibrarianLoop
+        import apriori.librarian.loop as loop_module
+
+        for i in range(3):
+            concept = _make_concept(store, name=f"GatherConcept{i}")
+            _make_work_item(store, concept)
+
+        adapter = _make_adapter([_VALID_ANALYSIS_JSON] * 3)
+        loop = LibrarianLoop(store, adapter, config)
+
+        gather_calls: list[int] = []
+        original_gather = loop_module.asyncio.gather
+
+        async def _wrapped_gather(*args, **kwargs):
+            gather_calls.append(len(args))
+            return await original_gather(*args, **kwargs)
+
+        with patch.object(loop_module.asyncio, "gather", new=_wrapped_gather):
+            records = await loop.run(iterations=3)
+
+        assert len(records) == 3
+        assert gather_calls, "run() should invoke asyncio.gather"
+        assert gather_calls[0] >= 1
+
+    @pytest.mark.asyncio
     async def test_stops_early_when_queue_empties(
         self, store: SQLiteStore, config: Config
     ):

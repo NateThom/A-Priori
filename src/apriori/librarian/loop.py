@@ -29,6 +29,7 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -172,25 +173,48 @@ class LibrarianLoop:
             logger.debug("Deleted %d old resolved work items", deleted)
 
         run_id = uuid.uuid4()
+        # Quick empty-queue check to preserve the single log event semantics.
+        initial_pending = self._store.get_pending_work_items()
+        if not initial_pending:
+            logger.info("No unresolved work items")
+            return []
+
+        claimed: set[uuid.UUID] = set()
+        lock = asyncio.Lock()
         activity_records: list[LibrarianActivity] = []
+        claimed_iterations = 0
 
-        for i in range(iterations):
-            # Fresh read — no state from previous iteration (AC-7)
-            pending = self._store.get_pending_work_items()
+        async def _worker() -> None:
+            nonlocal claimed_iterations
+            while True:
+                # Fresh read for every iteration claim (AC-7).
+                async with lock:
+                    if claimed_iterations >= iterations:
+                        return
 
-            if not pending:
-                logger.info("No unresolved work items")
-                break
+                    pending = self._store.get_pending_work_items()
+                    pending = [item for item in pending if item.id not in claimed]
+                    if not pending:
+                        return
 
-            work_item = self._select_work_item(pending)
-            activity = await self._run_iteration(
-                run_id=run_id, iteration=i, work_item=work_item
-            )
-            activity_records.append(activity)
+                    work_item = self._select_work_item(pending)
+                    claimed.add(work_item.id)
+                    iteration = claimed_iterations
+                    claimed_iterations += 1
 
-            # Persist activity record (AC-8)
-            self._store.create_librarian_activity(activity)
+                activity = await self._run_iteration(
+                    run_id=run_id, iteration=iteration, work_item=work_item
+                )
 
+                async with lock:
+                    claimed.discard(work_item.id)
+                    activity_records.append(activity)
+                    # Persist activity record (AC-8)
+                    self._store.create_librarian_activity(activity)
+
+        concurrency = min(iterations, len(initial_pending))
+        tasks = [_worker() for _ in range(concurrency)]
+        await asyncio.gather(*tasks)
         return activity_records
 
     # -------------------------------------------------------------------------
