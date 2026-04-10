@@ -23,7 +23,7 @@ These can be scheduled as first-stories within their parent epics. The epic can 
 | ID | Spike | Status | Parent Epic | Est. Hours | Decision Record |
 |----|-------|--------|-------------|------------|-----------------|
 | S-3 | Tree-sitter Grammar Quality | done | Structural Engine | 3-4 | [S-3-tree-sitter-grammar-quality.md](./S-3-tree-sitter-grammar-quality.md) |
-| S-4 | Blast Radius Validation | not-started | Phase 3: Blast Radius | 2-3 | — |
+| S-4 | Blast Radius Validation | done | Phase 3: Blast Radius | 2-3 | [S-4-blast-radius-validation.md](./S-4-blast-radius-validation.md) |
 | S-5 | YAML Performance at Scale | not-started | Storage Layer | 2-3 | — |
 | S-7 | Audit UI Technology | not-started | Audit UI | 4-6 | — |
 | S-8 | Co-Regulation Prompt Design | done | Quality Pipeline | 3-4 | [S-8-co-regulation-prompt-design.md](./S-8-co-regulation-prompt-design.md) |
