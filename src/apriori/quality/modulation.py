@@ -94,6 +94,9 @@ class ModulationTelemetry(BaseModel):
     selected_item_score: Optional[float] = None
     selected_item_type: Optional[str] = None
 
+    # True when bootstrap mode was active (coverage < bootstrap_coverage_threshold)
+    bootstrap_mode_active: bool = False
+
     computed_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
@@ -141,6 +144,8 @@ class AdaptiveModulator:
         blast_radius_target: float = 0.80,
         modulation_strength: float = 0.8,
         escalation_reduction_factor: float = 0.5,
+        bootstrap_coverage_threshold: Optional[float] = None,
+        bootstrap_developer_proximity_strength: float = 2.0,
     ) -> None:
         self._base_weights = base_weights
         self._coverage_target = coverage_target
@@ -148,6 +153,8 @@ class AdaptiveModulator:
         self._blast_radius_target = blast_radius_target
         self._modulation_strength = modulation_strength
         self._escalation_reduction_factor = escalation_reduction_factor
+        self._bootstrap_coverage_threshold = bootstrap_coverage_threshold
+        self._bootstrap_developer_proximity_strength = bootstrap_developer_proximity_strength
 
     # -------------------------------------------------------------------------
     # Core modulation
@@ -193,6 +200,24 @@ class AdaptiveModulator:
                 1 + freshness_deficit * self._modulation_strength
             )
 
+        # Bootstrap mode (ERD §6.1): when coverage is below the threshold, heavily
+        # weight developer_proximity so the librarian analyses actively-edited files
+        # first, giving value quickly before full codebase coverage is achieved.
+        bootstrap_active = (
+            self._bootstrap_coverage_threshold is not None
+            and coverage < self._bootstrap_coverage_threshold
+        )
+        if bootstrap_active and "developer_proximity" in effective_weights:
+            # proximity_deficit ranges from 0 (at threshold) to 1 (at coverage=0)
+            proximity_deficit = (
+                (self._bootstrap_coverage_threshold - coverage)  # type: ignore[operator]
+                / self._bootstrap_coverage_threshold  # type: ignore[operator]
+            )
+            effective_weights["developer_proximity"] = (
+                self._base_weights["developer_proximity"]
+                * (1 + proximity_deficit * self._bootstrap_developer_proximity_strength)
+            )
+
         telemetry = ModulationTelemetry(
             coverage=coverage,
             freshness=freshness,
@@ -204,6 +229,7 @@ class AdaptiveModulator:
             freshness_deficit=freshness_deficit,
             blast_radius_deficit=blast_radius_deficit,
             effective_weights=effective_weights,
+            bootstrap_mode_active=bootstrap_active,
         )
 
         return effective_weights, telemetry

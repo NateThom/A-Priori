@@ -79,6 +79,14 @@ class LibrarianConfig(BaseModel):
     max_iterations_per_run: int = Field(default=10, ge=1)
     context_window_tokens: int = Field(default=200000, ge=1000)
 
+    # Progressive enrichment (ERD §6.1): heavily weight developer_proximity
+    # when coverage is below this threshold (0.50 = 50%).
+    # Set to None to disable bootstrap mode entirely.
+    bootstrap_coverage_threshold: Optional[float] = Field(default=0.50, ge=0.0, le=1.0)
+    # Modulation strength multiplier used for the developer_proximity boost
+    # in bootstrap mode. Higher values produce a larger proximity weight boost.
+    bootstrap_developer_proximity_strength: float = Field(default=2.0, ge=0.0)
+
 
 class QualityCoRegulationConfig(BaseModel):
     """Co-regulation review configuration."""
@@ -112,6 +120,9 @@ class BudgetConfig(BaseModel):
         ge=1,
         description="Number of recent iterations used to compute the rolling average cost estimate.",
     )
+    # USD cost per 1,000 tokens — used to estimate remaining analysis cost.
+    # Default: $0.015/1K tokens (~Claude Sonnet pricing as a reasonable estimate).
+    cost_per_1k_tokens: float = Field(default=0.015, ge=0.0)
 
 
 class WorkQueueConfig(BaseModel):
