@@ -28,6 +28,7 @@ class LibrarianActivity(BaseModel):
             ``"error"``         — unexpected error (LLM call failed, etc.).
         concepts_integrated: Number of concepts integrated (0 on failure).
         edges_integrated: Number of edges integrated (0 on failure).
+        tokens_used: Total tokens consumed by this iteration (analysis + co-regulation).
         model_used: Identifier of the LLM model used.
         duration_seconds: Wall-clock time for this iteration.
         failure_reason: Populated on failure statuses; None on success.
@@ -41,6 +42,7 @@ class LibrarianActivity(BaseModel):
     status: Literal["success", "level1_failure", "level15_failure", "no_items", "error"]
     concepts_integrated: int = 0
     edges_integrated: int = 0
+    tokens_used: int = 0
     model_used: str = ""
     duration_seconds: float = 0.0
     failure_reason: Optional[str] = None

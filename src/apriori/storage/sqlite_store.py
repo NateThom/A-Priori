@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS librarian_activity (
     status              TEXT NOT NULL,
     concepts_integrated INTEGER NOT NULL DEFAULT 0,
     edges_integrated    INTEGER NOT NULL DEFAULT 0,
+    tokens_used         INTEGER NOT NULL DEFAULT 0,
     model_used          TEXT NOT NULL DEFAULT '',
     duration_seconds    REAL NOT NULL DEFAULT 0.0,
     failure_reason      TEXT,
@@ -162,6 +163,25 @@ _FTS5_TRIGGERS = [
     END
     """,
 ]
+
+
+# ---------------------------------------------------------------------------
+# Schema migration helpers
+# ---------------------------------------------------------------------------
+
+
+def _add_column_if_missing(
+    conn: sqlite3.Connection, table: str, column: str, column_def: str
+) -> None:
+    """Add ``column`` to ``table`` if it does not already exist.
+
+    SQLite's ALTER TABLE ADD COLUMN is idempotent in intent but raises an
+    error if the column already exists. We check PRAGMA table_info first to
+    avoid the error on repeated init calls (e.g. in tests).
+    """
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_def}")
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +238,10 @@ class SQLiteStore:
             stmt = statement.strip()
             if stmt:
                 cursor.execute(stmt)
+        conn.commit()
+        # Additive column migrations (safe to re-run — errors are swallowed when
+        # the column already exists, which is the normal state after first run).
+        _add_column_if_missing(conn, "librarian_activity", "tokens_used", "INTEGER NOT NULL DEFAULT 0")
         conn.commit()
         # vec0 virtual table (requires sqlite_vec extension)
         cursor.execute(
@@ -829,9 +853,9 @@ class SQLiteStore:
             """
             INSERT INTO librarian_activity
                 (id, run_id, iteration, work_item_id, status,
-                 concepts_integrated, edges_integrated, model_used,
-                 duration_seconds, failure_reason, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                 concepts_integrated, edges_integrated, tokens_used,
+                 model_used, duration_seconds, failure_reason, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 str(activity.id),
@@ -841,6 +865,7 @@ class SQLiteStore:
                 activity.status,
                 activity.concepts_integrated,
                 activity.edges_integrated,
+                activity.tokens_used,
                 activity.model_used,
                 activity.duration_seconds,
                 activity.failure_reason,
@@ -879,6 +904,7 @@ class SQLiteStore:
             status=row["status"],
             concepts_integrated=row["concepts_integrated"],
             edges_integrated=row["edges_integrated"],
+            tokens_used=row["tokens_used"] or 0,
             model_used=row["model_used"] or "",
             duration_seconds=row["duration_seconds"] or 0.0,
             failure_reason=row["failure_reason"],
