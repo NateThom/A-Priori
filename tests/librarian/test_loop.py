@@ -177,7 +177,7 @@ class TestIterationCountLimit:
 
         adapter = _make_adapter([_VALID_ANALYSIS_JSON] * 10)
         loop = LibrarianLoop(store, adapter, config)
-        records = await loop.run(iterations=3)
+        records, _ = await loop.run(iterations=3)
 
         assert len(records) == 3
 
@@ -204,7 +204,7 @@ class TestIterationCountLimit:
             return await original_gather(*args, **kwargs)
 
         with patch.object(loop_module.asyncio, "gather", new=_wrapped_gather):
-            records = await loop.run(iterations=3)
+            records, _ = await loop.run(iterations=3)
 
         assert len(records) == 3
         assert gather_calls, "run() should invoke asyncio.gather"
@@ -223,7 +223,7 @@ class TestIterationCountLimit:
 
         adapter = _make_adapter([_VALID_ANALYSIS_JSON] * 10)
         loop = LibrarianLoop(store, adapter, config)
-        records = await loop.run(iterations=5)
+        records, _ = await loop.run(iterations=5)
 
         assert len(records) == 2
 
@@ -266,7 +266,7 @@ class TestSuccessfulIteration:
 
         adapter = _make_adapter([_VALID_ANALYSIS_JSON])
         loop = LibrarianLoop(store, adapter, config)
-        records = await loop.run(iterations=1)
+        records, _ = await loop.run(iterations=1)
 
         assert len(records) == 1
         assert records[0].status == "success"
@@ -284,7 +284,7 @@ class TestSuccessfulIteration:
 
         adapter = _make_adapter([_VALID_ANALYSIS_JSON])
         loop = LibrarianLoop(store, adapter, config)
-        records = await loop.run(iterations=1)
+        records, _ = await loop.run(iterations=1)
 
         assert records[0].status == "success"
         assert records[0].model_used == "test-model"
@@ -343,7 +343,7 @@ class TestLevel1Failure:
         # Return unparseable / invalid JSON
         adapter = _make_adapter(["not valid json at all"])
         loop = LibrarianLoop(store, adapter, config)
-        records = await loop.run(iterations=1)
+        records, _ = await loop.run(iterations=1)
 
         assert records[0].status == "level1_failure"
         updated = store.get_work_item(work_item.id)
@@ -365,7 +365,7 @@ class TestLevel1Failure:
         # First call fails Level 1, second call succeeds
         adapter = _make_adapter(["invalid json", _VALID_ANALYSIS_JSON])
         loop = LibrarianLoop(store, adapter, config)
-        records = await loop.run(iterations=2)
+        records, _ = await loop.run(iterations=2)
 
         statuses = {r.status for r in records}
         assert "level1_failure" in statuses
@@ -412,7 +412,7 @@ class TestLevel15Failure:
         # First call = valid analysis, second call = failing L1.5 review
         adapter = _make_adapter([_VALID_ANALYSIS_JSON, _FAILING_LEVEL15_JSON])
         loop = LibrarianLoop(store, adapter, config)
-        records = await loop.run(iterations=1)
+        records, _ = await loop.run(iterations=1)
 
         assert records[0].status == "level15_failure"
         updated = store.get_work_item(work_item.id)
@@ -543,7 +543,7 @@ class TestEmptyQueue:
 
         adapter = _make_adapter([])
         loop = LibrarianLoop(store, adapter, config)
-        records = await loop.run(iterations=5)
+        records, _ = await loop.run(iterations=5)
 
         assert records == []
 
@@ -583,7 +583,7 @@ class TestNoStateCarried:
 
         adapter = _make_adapter([_VALID_ANALYSIS_JSON] * 3)
         loop = LibrarianLoop(store, adapter, config)
-        records = await loop.run(iterations=3)
+        records, _ = await loop.run(iterations=3)
 
         assert len(records) == 3
         # All work items should now be resolved
@@ -630,7 +630,7 @@ class TestActivityRecordWritten:
 
         adapter = _make_adapter([_VALID_ANALYSIS_JSON])
         loop = LibrarianLoop(store, adapter, config)
-        records = await loop.run(iterations=1)
+        records, _ = await loop.run(iterations=1)
 
         stored = store.list_librarian_activities()
         assert len(stored) == 1
@@ -667,7 +667,7 @@ class TestActivityRecordWritten:
 
         adapter = _make_adapter([_VALID_ANALYSIS_JSON] * 3)
         loop = LibrarianLoop(store, adapter, config)
-        records = await loop.run(iterations=3)
+        records, _ = await loop.run(iterations=3)
 
         run_ids = {r.run_id for r in records}
         assert len(run_ids) == 1  # all from same run
@@ -710,7 +710,7 @@ class TestPreRunHook:
 
         adapter = _make_adapter([])
         loop = LibrarianLoop(store, adapter, config, pre_run_hook=None)
-        records = await loop.run(iterations=1)
+        records, _ = await loop.run(iterations=1)
         assert records == []
 
 
