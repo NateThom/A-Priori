@@ -67,7 +67,7 @@ def _make_activity(
     run_id: uuid.UUID,
     iteration: int,
     status: str = "success",
-    tokens: int = 1000,
+    tokens_used: int = 1000,
     failure_reason: Optional[str] = None,
     concepts_integrated: int = 1,
     edges_integrated: int = 1,
@@ -81,6 +81,7 @@ def _make_activity(
         status=status,  # type: ignore[arg-type]
         concepts_integrated=concepts_integrated,
         edges_integrated=edges_integrated,
+        tokens_used=tokens_used,
         model_used=model_used,
         duration_seconds=duration_seconds,
         failure_reason=failure_reason,
@@ -231,6 +232,51 @@ def test_librarian_status_shows_yield(capsys, monkeypatch):
     out = capsys.readouterr().out
     # Should show at least yield or success information
     assert "yield" in out.lower() or "success" in out.lower() or "%" in out
+
+
+def test_librarian_status_shows_token_spend(capsys, monkeypatch):
+    """Given activities with known tokens_used values, when librarian status is
+    run, then token spend totals per run are displayed (AC2)."""
+    from apriori.shells import cli
+
+    run_id = uuid.uuid4()
+    activities = [
+        _make_activity(run_id, 0, status="success", tokens_used=1500),
+        _make_activity(run_id, 1, status="success", tokens_used=2000),
+        _make_activity(run_id, 2, status="level1_failure", tokens_used=800,
+                       failure_reason="bad output"),
+    ]
+    store = _fake_store(activities=activities)
+
+    monkeypatch.setattr("apriori.shells.cli._build_store_from_args", lambda args: store)
+    args = argparse.Namespace(db=None, json=False)
+    cli._cmd_librarian_status(args)
+
+    out = capsys.readouterr().out
+    # Total tokens for this run = 1500 + 2000 + 800 = 4300
+    assert "4,300" in out or "4300" in out
+
+
+def test_librarian_status_json_includes_total_tokens(capsys, monkeypatch):
+    """Given --json flag and activities with known tokens_used, when librarian
+    status is run, then JSON output includes total_tokens per run (AC2)."""
+    from apriori.shells import cli
+
+    run_id = uuid.uuid4()
+    activities = [
+        _make_activity(run_id, 0, status="success", tokens_used=3000),
+        _make_activity(run_id, 1, status="success", tokens_used=4000),
+    ]
+    store = _fake_store(activities=activities)
+
+    monkeypatch.setattr("apriori.shells.cli._build_store_from_args", lambda args: store)
+    args = argparse.Namespace(db=None, json=True)
+    cli._cmd_librarian_status(args)
+
+    out = capsys.readouterr().out
+    data = json.loads(out)
+    assert len(data) == 1
+    assert data[0]["total_tokens"] == 7000
 
 
 def test_librarian_status_shows_failure_logs(capsys, monkeypatch):

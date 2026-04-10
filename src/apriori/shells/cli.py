@@ -753,6 +753,7 @@ def _cmd_librarian_status(args: argparse.Namespace) -> None:
             run_acts = runs[rid]
             total = len(run_acts)
             resolved = sum(1 for a in run_acts if a.status == "success")
+            total_tokens = sum(a.tokens_used for a in run_acts)
             failures = [
                 {"iteration": a.iteration, "status": a.status, "reason": a.failure_reason}
                 for a in run_acts
@@ -763,6 +764,7 @@ def _cmd_librarian_status(args: argparse.Namespace) -> None:
                 "total_iterations": total,
                 "resolved": resolved,
                 "yield": resolved / total if total else 0.0,
+                "total_tokens": total_tokens,
                 "failures": failures,
             })
         print(_json.dumps(output))
@@ -778,9 +780,13 @@ def _cmd_librarian_status(args: argparse.Namespace) -> None:
         total = len(run_acts)
         resolved = sum(1 for a in run_acts if a.status == "success")
         run_yield = resolved / total if total else 0.0
+        total_tokens = sum(a.tokens_used for a in run_acts)
         started_at = run_acts[0].created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
         print(f"\n  Run {rid[:8]}…  ({started_at})")
-        print(f"    Iterations: {total}  |  Yield: {run_yield:.1%}  |  Resolved: {resolved}")
+        print(
+            f"    Iterations: {total}  |  Yield: {run_yield:.1%}  |  "
+            f"Resolved: {resolved}  |  Tokens: {total_tokens:,}"
+        )
 
         failures = [a for a in run_acts if a.failure_reason]
         if failures:
