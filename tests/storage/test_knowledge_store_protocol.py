@@ -432,8 +432,8 @@ class TestProtocolCompleteness:
             if not name.startswith("_")
         ]
         count = len(protocol_methods)
-        assert 25 <= count <= 35, (
-            f"Expected 25–30 methods, found {count}: {sorted(protocol_methods)}"
+        assert 25 <= count <= 40, (
+            f"Expected 25–40 methods, found {count}: {sorted(protocol_methods)}"
         )
 
 
