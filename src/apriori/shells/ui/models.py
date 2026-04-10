@@ -40,9 +40,11 @@ class ConceptDetail(BaseModel):
     description: str
     labels: list[str]
     confidence: float
+    code_references: list[dict[str, Any]]
     created_by: str
     verified_by: Optional[str]
     last_verified: Optional[str]
+    derived_from_code_version: Optional[str]
     impact_profile: Optional[Any]
     created_at: str
     updated_at: str
@@ -55,6 +57,12 @@ class CytoscapeNodeData(BaseModel):
     id: str
     label: str
     type: str
+    labels: list[str]
+    confidence: float
+    highlighted: bool
+    confidence_bucket: str
+    visual_opacity: float
+    visual_color: str
 
 
 class CytoscapeNode(BaseModel):
@@ -70,6 +78,12 @@ class CytoscapeEdgeData(BaseModel):
     source: str
     target: str
     weight: float
+    edge_type: str
+    evidence_type: str
+    confidence: float
+    confidence_bucket: str
+    visual_opacity: float
+    visual_line_style: str
 
 
 class CytoscapeEdge(BaseModel):
@@ -83,6 +97,7 @@ class GraphResponse(BaseModel):
 
     nodes: list[CytoscapeNode]
     edges: list[CytoscapeEdge]
+    layout: str
 
 
 class ActivityItem(BaseModel):
