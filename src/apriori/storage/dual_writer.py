@@ -22,6 +22,7 @@ from typing import Any, Optional
 
 from apriori.models.concept import Concept
 from apriori.models.edge import Edge
+from apriori.models.librarian_activity import LibrarianActivity
 from apriori.models.review_outcome import ReviewOutcome
 from apriori.models.work_item import FailureRecord, WorkItem
 from apriori.storage.sqlite_store import SQLiteStore
@@ -311,3 +312,16 @@ class DualWriter:
     def rebuild_index(self) -> None:
         """Rebuild the vector similarity index in SQLite."""
         self._sqlite.rebuild_index()
+
+    # -------------------------------------------------------------------------
+    # Librarian Activity — SQLite-only
+    # -------------------------------------------------------------------------
+
+    def create_librarian_activity(self, activity: LibrarianActivity) -> LibrarianActivity:
+        """SQLite-only — librarian activity records are never written to YAML."""
+        return self._sqlite.create_librarian_activity(activity)
+
+    def list_librarian_activities(
+        self, run_id: Optional[uuid.UUID] = None
+    ) -> list[LibrarianActivity]:
+        return self._sqlite.list_librarian_activities(run_id)

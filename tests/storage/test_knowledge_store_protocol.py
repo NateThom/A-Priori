@@ -23,6 +23,7 @@ import pytest
 
 from apriori.models.concept import Concept, CodeReference
 from apriori.models.edge import Edge
+from apriori.models.librarian_activity import LibrarianActivity
 from apriori.models.work_item import WorkItem, FailureRecord
 from apriori.models.review_outcome import ReviewOutcome
 from apriori.storage.protocol import KnowledgeStore
@@ -85,6 +86,7 @@ class _InMemoryStore:
         self._edges: dict[uuid.UUID, Edge] = {}
         self._work_items: dict[uuid.UUID, WorkItem] = {}
         self._review_outcomes: list[ReviewOutcome] = []
+        self._activities: list[LibrarianActivity] = []
 
     # --- Concept CRUD ---
 
@@ -320,6 +322,19 @@ class _InMemoryStore:
 
     def rebuild_index(self) -> None:
         pass  # no-op in in-memory store
+
+    # --- Librarian Activity ---
+
+    def create_librarian_activity(self, activity: LibrarianActivity) -> LibrarianActivity:
+        self._activities.append(activity)
+        return activity
+
+    def list_librarian_activities(
+        self, run_id: Optional[uuid.UUID] = None
+    ) -> list[LibrarianActivity]:
+        if run_id is not None:
+            return [a for a in self._activities if a.run_id == run_id]
+        return list(self._activities)
 
 
 # ---------------------------------------------------------------------------
