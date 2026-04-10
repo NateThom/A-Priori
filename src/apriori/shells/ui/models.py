@@ -101,18 +101,49 @@ class GraphResponse(BaseModel):
 
 
 class ActivityItem(BaseModel):
-    """A single work item representing one librarian iteration."""
+    """A compact summary of the processed work item."""
 
     id: uuid.UUID
     item_type: str
-    concept_id: uuid.UUID
     description: str
-    file_path: Optional[str]
+
+
+class ActivityConcept(BaseModel):
+    """A compact summary of the concept created or updated in an iteration."""
+
+    id: uuid.UUID
+    name: str
+
+
+class ActivityFailureRecord(BaseModel):
+    """Failure details used by expandable failed-iteration entries."""
+
+    attempted_at: str
+    model_used: str
+    prompt_template: str
+    failure_reason: str
+    quality_scores: Optional[dict[str, float]]
+    reviewer_feedback: Optional[str]
+
+
+class ActivityEntry(BaseModel):
+    """A single librarian iteration entry for the activity feed."""
+
+    id: uuid.UUID
+    run_id: uuid.UUID
+    iteration: int
     created_at: str
-    resolved_at: Optional[str]
-    failure_count: int
-    escalated: bool
-    resolved: bool
+    status: str
+    passed: bool
+    failure_reason: Optional[str]
+    work_item: Optional[ActivityItem]
+    concept: Optional[ActivityConcept]
+    co_regulation_scores: Optional[dict[str, float]]
+    failure_record: Optional[ActivityFailureRecord]
+    concepts_integrated: int
+    edges_integrated: int
+    model_used: str
+    duration_seconds: float
 
 
 class HealthMetrics(BaseModel):

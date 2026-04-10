@@ -1,10 +1,13 @@
-"""Tests for read-only Graph API (Story 11.2a).
+"""Tests for read-only Graph API and activity feed endpoints.
 
 AC traceability:
 - AC-1: GET /api/concepts with filters returns filtered concepts.
 - AC-2: GET /api/concepts/{id} returns full concept with edges and impact profile.
 - AC-3: GET /api/graph?center={id}&radius=2 returns Cytoscape-format subgraph.
 - AC-4: GET /api/activity?limit=20 returns 20 most recent librarian iterations.
+- AC-6: Activity entries show work item, concept, co-regulation scores (if any), pass/fail,
+        and failure reason on failures.
+- AC-7: Failed entries expose full FailureRecord including reviewer_feedback.
 - AC-5: GET /api/health returns metrics, targets, effective weights, queue depth.
 - AC-6: GET /api/escalated-items returns escalated items with associated concepts
   and full failure history for the escalated-items view.
@@ -22,6 +25,7 @@ from apriori.models.concept import CodeReference
 from apriori.models.concept import Concept
 from apriori.models.edge import Edge
 from apriori.models.impact import ImpactProfile, ImpactEntry
+from apriori.models.librarian_activity import LibrarianActivity
 from apriori.models.review_outcome import ReviewOutcome
 from apriori.models.work_item import FailureRecord, WorkItem
 from apriori.storage.protocol import KnowledgeStore
@@ -40,6 +44,7 @@ class _TestStore:
         self._concepts: dict[uuid.UUID, Concept] = {}
         self._edges: dict[uuid.UUID, Edge] = {}
         self._work_items: dict[uuid.UUID, WorkItem] = {}
+        self._librarian_activities: list[LibrarianActivity] = []
         self._review_outcomes: list[ReviewOutcome] = []
 
     # --- Concept CRUD ---
@@ -126,6 +131,20 @@ class _TestStore:
             reverse=True,
         )
         return items[:limit]
+
+    # --- Librarian Activity operations ---
+
+    def create_librarian_activity(self, activity: LibrarianActivity) -> LibrarianActivity:
+        self._librarian_activities.append(activity)
+        return activity
+
+    def list_librarian_activities(
+        self, run_id: Optional[uuid.UUID] = None
+    ) -> list[LibrarianActivity]:
+        activities = list(self._librarian_activities)
+        if run_id is not None:
+            activities = [activity for activity in activities if activity.run_id == run_id]
+        return sorted(activities, key=lambda activity: activity.iteration)
 
     def record_failure(
         self, work_item_id: uuid.UUID, record: FailureRecord
@@ -799,46 +818,64 @@ class TestGetActivity:
         assert response.status_code == 200
         assert response.json() == []
 
-    def test_returns_work_items_ordered_by_created_at_desc(
+    def test_returns_iterations_ordered_reverse_chronological(
         self, client: TestClient, store: _TestStore
     ) -> None:
-        """Work items are returned most-recent first."""
+        """Iterations are returned newest-first when activity feed loads."""
         concept = _make_concept("C")
         store.create_concept(concept)
-        wi1 = WorkItem(
+        wi = WorkItem(
             item_type="verify_concept",
             concept_id=concept.id,
-            description="First",
+            description="Analyze concept C",
+        )
+        store.create_work_item(wi)
+
+        run_id = uuid.uuid4()
+        older = LibrarianActivity(
+            run_id=run_id,
+            iteration=0,
+            work_item_id=wi.id,
+            status="success",
             created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
         )
-        wi2 = WorkItem(
-            item_type="verify_concept",
-            concept_id=concept.id,
-            description="Second",
+        newer = LibrarianActivity(
+            run_id=run_id,
+            iteration=1,
+            work_item_id=wi.id,
+            status="success",
             created_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
         )
-        store.create_work_item(wi1)
-        store.create_work_item(wi2)
+        store.create_librarian_activity(older)
+        store.create_librarian_activity(newer)
 
         response = client.get("/api/activity?limit=20")
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 2
-        assert data[0]["description"] == "Second"
-        assert data[1]["description"] == "First"
+        assert data[0]["iteration"] == 1
+        assert data[1]["iteration"] == 0
 
     def test_limit_parameter_caps_result_count(
         self, client: TestClient, store: _TestStore
     ) -> None:
-        """GET /api/activity?limit=1 returns at most 1 item."""
+        """GET /api/activity?limit=1 returns at most 1 activity entry."""
         concept = _make_concept("C")
         store.create_concept(concept)
+        wi = WorkItem(
+            item_type="verify_concept",
+            concept_id=concept.id,
+            description="Analyze concept C",
+        )
+        store.create_work_item(wi)
+        run_id = uuid.uuid4()
         for i in range(5):
-            store.create_work_item(
-                WorkItem(
-                    item_type="verify_concept",
-                    concept_id=concept.id,
-                    description=f"Item {i}",
+            store.create_librarian_activity(
+                LibrarianActivity(
+                    run_id=run_id,
+                    iteration=i,
+                    work_item_id=wi.id,
+                    status="success",
                 )
             )
 
@@ -849,15 +886,23 @@ class TestGetActivity:
     def test_default_limit_is_20(
         self, client: TestClient, store: _TestStore
     ) -> None:
-        """GET /api/activity with no limit param returns at most 20 items."""
+        """GET /api/activity with no limit param returns at most 20 entries."""
         concept = _make_concept("C")
         store.create_concept(concept)
+        wi = WorkItem(
+            item_type="verify_concept",
+            concept_id=concept.id,
+            description="Analyze concept C",
+        )
+        store.create_work_item(wi)
+        run_id = uuid.uuid4()
         for i in range(25):
-            store.create_work_item(
-                WorkItem(
-                    item_type="verify_concept",
-                    concept_id=concept.id,
-                    description=f"Item {i}",
+            store.create_librarian_activity(
+                LibrarianActivity(
+                    run_id=run_id,
+                    iteration=i,
+                    work_item_id=wi.id,
+                    status="success",
                 )
             )
 
@@ -865,14 +910,38 @@ class TestGetActivity:
         assert response.status_code == 200
         assert len(response.json()) == 20
 
-    def test_activity_item_contains_required_fields(
+    def test_activity_entry_contains_required_display_fields(
         self, client: TestClient, store: _TestStore
     ) -> None:
-        """Each activity item includes id, item_type, concept_id, description, created_at."""
+        """Each entry shows work item, concept, pass/fail status, and failure reason on failure."""
         concept = _make_concept("C")
         store.create_concept(concept)
         wi = _make_work_item(concept.id, "Check this concept.")
         store.create_work_item(wi)
+
+        failure = FailureRecord(
+            attempted_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            model_used="claude-sonnet",
+            prompt_template="level15_co_regulation_v1",
+            failure_reason="Specificity too low",
+            quality_scores={
+                "specificity": 0.2,
+                "structural_corroboration": 0.6,
+                "completeness": 0.4,
+            },
+            reviewer_feedback="Use concrete data flow details.",
+        )
+        wi = store.record_failure(wi.id, failure)
+        store.update_work_item(wi)
+        store.create_librarian_activity(
+            LibrarianActivity(
+                run_id=uuid.uuid4(),
+                iteration=0,
+                work_item_id=wi.id,
+                status="level15_failure",
+                failure_reason="Specificity too low",
+            )
+        )
 
         response = client.get("/api/activity?limit=20")
         assert response.status_code == 200
@@ -880,9 +949,57 @@ class TestGetActivity:
         assert len(data) == 1
         item = data[0]
         assert "id" in item
-        assert item["item_type"] == "verify_concept"
-        assert item["concept_id"] == str(concept.id)
-        assert "created_at" in item
+        assert item["status"] == "level15_failure"
+        assert item["passed"] is False
+        assert item["failure_reason"] == "Specificity too low"
+        assert item["work_item"]["item_type"] == "verify_concept"
+        assert item["work_item"]["description"] == "Check this concept."
+        assert item["concept"]["id"] == str(concept.id)
+        assert item["co_regulation_scores"]["specificity"] == 0.2
+
+    def test_failed_entry_includes_full_failure_record_for_expansion(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """Failed iteration includes full FailureRecord with reviewer_feedback."""
+        concept = _make_concept("C")
+        store.create_concept(concept)
+        wi = _make_work_item(concept.id, "Check this concept.")
+        store.create_work_item(wi)
+
+        failure = FailureRecord(
+            attempted_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            model_used="claude-sonnet",
+            prompt_template="level15_co_regulation_v1",
+            failure_reason="Completeness score below threshold",
+            quality_scores={
+                "specificity": 0.6,
+                "structural_corroboration": 0.7,
+                "completeness": 0.2,
+            },
+            reviewer_feedback="Document return-value edge cases.",
+        )
+        wi = store.record_failure(wi.id, failure)
+        store.update_work_item(wi)
+        store.create_librarian_activity(
+            LibrarianActivity(
+                run_id=uuid.uuid4(),
+                iteration=3,
+                work_item_id=wi.id,
+                status="level15_failure",
+                failure_reason="Completeness score below threshold",
+            )
+        )
+
+        response = client.get("/api/activity?limit=20")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        record = data[0]["failure_record"]
+        assert record["failure_reason"] == "Completeness score below threshold"
+        assert record["model_used"] == "claude-sonnet"
+        assert record["prompt_template"] == "level15_co_regulation_v1"
+        assert record["quality_scores"]["completeness"] == 0.2
+        assert record["reviewer_feedback"] == "Document return-value edge cases."
 
 
 # ---------------------------------------------------------------------------
