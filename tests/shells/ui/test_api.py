@@ -1,4 +1,4 @@
-"""Tests for read-only Graph API and activity feed endpoints.
+"""Tests for read-only Graph API, activity feed endpoints, and Health Dashboard (Story 11.6).
 
 AC traceability:
 - AC-1: GET /api/concepts with filters returns filtered concepts.
@@ -9,6 +9,9 @@ AC traceability:
         and failure reason on failures.
 - AC-7: Failed entries expose full FailureRecord including reviewer_feedback.
 - AC-5: GET /api/health returns metrics, targets, effective weights, queue depth.
+- AC-6 (Story 11.6): Health dashboard shows three metrics vs. targets (coverage 80%,
+  freshness 90%, blast radius 70%), effective weights, work queue depth, and escalated
+  count. Refreshing the endpoint yields updated values.
 - AC-6: GET /api/escalated-items returns escalated items with associated concepts
   and full failure history for the escalated-items view.
 """
@@ -1219,3 +1222,117 @@ class TestGetEscalatedItemsView:
         reasons = {attempt["failure_reason"] for attempt in history}
         assert models == {"claude-sonnet-4-20250514", "qwen2.5:7b"}
         assert len(reasons) == 3
+
+
+# ---------------------------------------------------------------------------
+# AC-6 (Story 11.6): Health Dashboard — metric targets, escalated count, refresh
+# ---------------------------------------------------------------------------
+
+
+class TestHealthDashboard:
+    """Story 11.6: single-glance health dashboard for engineering leads."""
+
+    def test_coverage_target_is_eighty_percent(self, client: TestClient) -> None:
+        """AC-1: coverage target must be 0.80 (80%)."""
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        assert response.json()["targets"]["coverage_target"] == pytest.approx(0.80)
+
+    def test_freshness_target_is_ninety_percent(self, client: TestClient) -> None:
+        """AC-1: freshness target must be 0.90 (90%)."""
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        assert response.json()["targets"]["freshness_target"] == pytest.approx(0.90)
+
+    def test_blast_radius_target_is_seventy_percent(self, client: TestClient) -> None:
+        """AC-1: blast radius completeness target must be 0.70 (70%)."""
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        assert response.json()["targets"]["blast_radius_target"] == pytest.approx(0.70)
+
+    def test_health_contains_escalated_count(self, client: TestClient) -> None:
+        """AC-3: Health response contains an escalated_count field."""
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        assert "escalated_count" in response.json()
+
+    def test_escalated_count_zero_when_no_escalations(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """AC-3: escalated_count is 0 when no items are escalated."""
+        concept = _make_concept("C")
+        store.create_concept(concept)
+        store.create_work_item(_make_work_item(concept.id))
+
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        assert response.json()["escalated_count"] == 0
+
+    def test_escalated_count_reflects_escalated_items(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """AC-3: escalated_count matches the actual number of escalated work items."""
+        concept = _make_concept("C")
+        store.create_concept(concept)
+        wi1 = _make_work_item(concept.id)
+        wi2 = _make_work_item(concept.id, "Second item")
+        store.create_work_item(wi1)
+        store.create_work_item(wi2)
+        store.escalate_work_item(wi1.id)
+
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["escalated_count"] == 1
+        assert data["work_queue_depth"] == 2
+
+    def test_effective_weights_include_all_six_factors(
+        self, client: TestClient
+    ) -> None:
+        """AC-2: effective_weights contains all six priority factors."""
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        weights = response.json()["effective_weights"]
+        expected_factors = {
+            "coverage_gap",
+            "needs_review",
+            "developer_proximity",
+            "git_activity",
+            "staleness",
+            "failure_urgency",
+        }
+        assert expected_factors == set(weights.keys())
+
+    def test_refresh_shows_updated_queue_depth(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """AC-4: After adding a new work item, a fresh request shows updated depth."""
+        concept = _make_concept("C")
+        store.create_concept(concept)
+
+        response1 = client.get("/api/health")
+        assert response1.status_code == 200
+        initial_depth = response1.json()["work_queue_depth"]
+
+        store.create_work_item(_make_work_item(concept.id))
+
+        response2 = client.get("/api/health")
+        assert response2.status_code == 200
+        assert response2.json()["work_queue_depth"] == initial_depth + 1
+
+    def test_refresh_shows_updated_escalated_count(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """AC-4: After escalating a work item, a fresh request shows updated escalated_count."""
+        concept = _make_concept("C")
+        store.create_concept(concept)
+        wi = _make_work_item(concept.id)
+        store.create_work_item(wi)
+
+        response1 = client.get("/api/health")
+        assert response1.json()["escalated_count"] == 0
+
+        store.escalate_work_item(wi.id)
+
+        response2 = client.get("/api/health")
+        assert response2.json()["escalated_count"] == 1

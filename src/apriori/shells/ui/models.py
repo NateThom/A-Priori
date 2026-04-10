@@ -169,6 +169,7 @@ class HealthResponse(BaseModel):
     targets: HealthTargets
     effective_weights: dict[str, float]
     work_queue_depth: int
+    escalated_count: int
 
 
 class EscalatedAssociatedConcept(BaseModel):
