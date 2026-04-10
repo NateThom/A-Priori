@@ -1,0 +1,68 @@
+{
+  "total_baseline_calls": 737,
+  "total_kg_calls": 10,
+  "overall_reduction_pct": 98.64,
+  "is_gate": false,
+  "condition_labels": [
+    "baseline (no knowledge graph)",
+    "with knowledge graph"
+  ],
+  "per_task": [
+    {
+      "codebase": "apriori",
+      "task_name": "enumerate_definitions",
+      "baseline_calls": 71,
+      "kg_calls": 1,
+      "reduction_pct": 98.59
+    },
+    {
+      "codebase": "apriori",
+      "task_name": "keyword_search",
+      "baseline_calls": 70,
+      "kg_calls": 1,
+      "reduction_pct": 98.57
+    },
+    {
+      "codebase": "apriori",
+      "task_name": "dependency_analysis",
+      "baseline_calls": 140,
+      "kg_calls": 2,
+      "reduction_pct": 98.57
+    },
+    {
+      "codebase": "apriori",
+      "task_name": "module_summary",
+      "baseline_calls": 70,
+      "kg_calls": 1,
+      "reduction_pct": 98.57
+    },
+    {
+      "codebase": "tests",
+      "task_name": "enumerate_definitions",
+      "baseline_calls": 78,
+      "kg_calls": 1,
+      "reduction_pct": 98.72
+    },
+    {
+      "codebase": "tests",
+      "task_name": "keyword_search",
+      "baseline_calls": 77,
+      "kg_calls": 1,
+      "reduction_pct": 98.7
+    },
+    {
+      "codebase": "tests",
+      "task_name": "dependency_analysis",
+      "baseline_calls": 154,
+      "kg_calls": 2,
+      "reduction_pct": 98.7
+    },
+    {
+      "codebase": "tests",
+      "task_name": "module_summary",
+      "baseline_calls": 77,
+      "kg_calls": 1,
+      "reduction_pct": 98.7
+    }
+  ]
+}
