@@ -203,7 +203,7 @@ class TestHighQualityOutputPasses:
         adapter = _make_mock_adapter(_make_good_llm_response())
 
         # When: check_level15 is called
-        assessment = await check_level15(
+        assessment, _ = await check_level15(
             librarian_output, "code snippet", "structural context", adapter
         )
 
@@ -218,12 +218,37 @@ class TestHighQualityOutputPasses:
         adapter = _make_mock_adapter(_make_good_llm_response())
 
         # When: check_level15 is called
-        assessment = await check_level15(
+        assessment, _ = await check_level15(
             _make_librarian_output(), "code", "context", adapter
         )
 
         # Then: returns a CoRegulationAssessment
         assert isinstance(assessment, CoRegulationAssessment)
+
+    async def test_returns_tokens_used_from_llm_call(self):
+        # Given: an adapter whose response reports 400 tokens used
+        adapter = _make_mock_adapter(_make_good_llm_response())  # tokens_used=400
+
+        # When: check_level15 is called
+        _, tokens_used = await check_level15(
+            _make_librarian_output(), "code", "context", adapter
+        )
+
+        # Then: tokens_used matches what the adapter reported
+        assert tokens_used == 400
+
+    async def test_disabled_config_returns_zero_tokens(self):
+        # Given: co-regulation disabled
+        config = QualityCoRegulationConfig(enabled=False)
+        adapter = _make_mock_adapter(_make_good_llm_response())
+
+        # When: check_level15 is called with disabled config
+        _, tokens_used = await check_level15(
+            _make_librarian_output(), "code", "context", adapter, config=config
+        )
+
+        # Then: no tokens consumed (no LLM call made)
+        assert tokens_used == 0
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +270,7 @@ class TestGenericOutputFails:
         adapter = _make_mock_adapter(_make_generic_llm_response())
 
         # When: check_level15 is called
-        assessment = await check_level15(
+        assessment, _ = await check_level15(
             generic_output, "code snippet", "structural context", adapter
         )
 
@@ -261,7 +286,7 @@ class TestGenericOutputFails:
         adapter = _make_mock_adapter(_make_generic_llm_response())
 
         # When: check_level15 is called
-        assessment = await check_level15(
+        assessment, _ = await check_level15(
             generic_output, "code snippet", "structural context", adapter
         )
 
@@ -275,7 +300,7 @@ class TestGenericOutputFails:
         adapter = _make_mock_adapter(_make_generic_llm_response())
 
         # When: check_level15 is called
-        assessment = await check_level15(
+        assessment, _ = await check_level15(
             generic_output, "code snippet", "structural context", adapter
         )
 
@@ -298,7 +323,7 @@ class TestDisabledConfigAutoPass:
         librarian_output = _make_librarian_output()
 
         # When: check_level15 is called with disabled config
-        assessment = await check_level15(
+        assessment, _ = await check_level15(
             librarian_output, "code", "context", adapter, config=config
         )
 
@@ -375,7 +400,7 @@ class TestMalformedResponseConservativeFailure:
         adapter = _make_mock_adapter(bad_response)
 
         # When: check_level15 is called
-        assessment = await check_level15(
+        assessment, _ = await check_level15(
             _make_librarian_output(), "code", "context", adapter
         )
 
@@ -393,7 +418,7 @@ class TestMalformedResponseConservativeFailure:
         adapter = _make_mock_adapter(bad_response)
 
         # When: check_level15 is called
-        assessment = await check_level15(
+        assessment, _ = await check_level15(
             _make_librarian_output(), "code", "context", adapter
         )
 

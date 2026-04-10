@@ -9,6 +9,7 @@ Routes:
     GET /api/graph                — subgraph in Cytoscape format
     GET /api/activity             — recent librarian iterations (work items)
     GET /api/health               — quality metrics, targets, weights, queue depth
+    GET /api/escalated-items      — escalated view payload with failure history
 
 Static frontend assets are served from a ``static/`` directory adjacent to this
 file when that directory exists. In development the React app is served by Vite
@@ -19,9 +20,8 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Any
 from pathlib import Path
-from typing import Optional
+from typing import Any, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, field_validator
@@ -32,6 +32,9 @@ from apriori.models.review_outcome import VALID_ERROR_TYPES
 from apriori.quality.metrics import MetricsEngine
 from apriori.quality.modulation import AdaptiveModulator
 from apriori.shells.ui.models import (
+    ActivityConcept,
+    ActivityEntry,
+    ActivityFailureRecord,
     ActivityItem,
     CodeReferenceView,
     ConceptDetail,
@@ -41,11 +44,15 @@ from apriori.shells.ui.models import (
     CytoscapeNode,
     CytoscapeNodeData,
     EdgeSummary,
+    EscalatedAssociatedConcept,
+    EscalatedFailureAttempt,
+    EscalatedItemView,
     GraphResponse,
     HealthMetrics,
     HealthResponse,
     HealthTargets,
 )
+from apriori.models.work_item import FailureRecord
 from apriori.storage.protocol import KnowledgeStore
 
 
@@ -157,6 +164,7 @@ def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
             last_verified=(
                 concept.last_verified.isoformat() if concept.last_verified else None
             ),
+            derived_from_code_version=concept.derived_from_code_version,
             impact_profile=(
                 concept.impact_profile.model_dump() if concept.impact_profile else None
             ),
@@ -166,18 +174,102 @@ def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
             code_references=[_to_code_reference_view(r) for r in concept.code_references],
         )
 
+    def _confidence_bucket(confidence: float) -> str:
+        if confidence >= 0.8:
+            return "high"
+        if confidence >= 0.5:
+            return "medium"
+        return "low"
+
+    def _node_visuals(bucket: str) -> tuple[float, str]:
+        if bucket == "high":
+            return 0.95, "#0f766e"
+        if bucket == "medium":
+            return 0.72, "#b45309"
+        return 0.48, "#b91c1c"
+
+    def _edge_visuals(bucket: str) -> tuple[float, str]:
+        if bucket == "high":
+            return 0.9, "solid"
+        if bucket == "medium":
+            return 0.65, "solid"
+        return 0.42, "dashed"
+
     def _to_activity_item(wi) -> ActivityItem:
         return ActivityItem(
             id=wi.id,
             item_type=wi.item_type,
-            concept_id=wi.concept_id,
             description=wi.description,
-            file_path=wi.file_path,
-            created_at=wi.created_at.isoformat(),
-            resolved_at=(wi.resolved_at.isoformat() if wi.resolved_at else None),
+        )
+
+    def _to_activity_concept(concept) -> ActivityConcept:
+        return ActivityConcept(id=concept.id, name=concept.name)
+
+    def _normalize_quality_scores(
+        quality_scores: Optional[dict],
+    ) -> Optional[dict[str, float]]:
+        if quality_scores is None:
+            return None
+        normalized: dict[str, float] = {}
+        for key, value in quality_scores.items():
+            if isinstance(value, (int, float)):
+                normalized[key] = float(value)
+        return normalized if normalized else None
+
+    def _select_failure_record_for_activity(
+        records: list[FailureRecord], activity
+    ) -> Optional[FailureRecord]:
+        if not records:
+            return None
+        same_reason = [
+            record
+            for record in records
+            if activity.failure_reason and record.failure_reason == activity.failure_reason
+        ]
+        candidates = same_reason if same_reason else records
+        return min(
+            candidates,
+            key=lambda record: abs(
+                (record.attempted_at - activity.created_at).total_seconds()
+            ),
+        )
+
+    def _to_activity_failure_record(
+        record: FailureRecord,
+    ) -> ActivityFailureRecord:
+        return ActivityFailureRecord(
+            attempted_at=record.attempted_at.isoformat(),
+            model_used=record.model_used,
+            prompt_template=record.prompt_template,
+            failure_reason=record.failure_reason,
+            quality_scores=_normalize_quality_scores(record.quality_scores),
+            reviewer_feedback=record.reviewer_feedback,
+        )
+
+    def _to_escalated_item_view(wi) -> EscalatedItemView:
+        concept = store.get_concept(wi.concept_id)
+        associated_concept = EscalatedAssociatedConcept(
+            id=wi.concept_id,
+            name=concept.name if concept is not None else None,
+            labels=sorted(concept.labels) if concept is not None else [],
+        )
+        return EscalatedItemView(
+            id=wi.id,
+            item_type=wi.item_type,
+            description=wi.description,
             failure_count=wi.failure_count,
-            escalated=wi.escalated,
-            resolved=wi.resolved,
+            associated_concept=associated_concept,
+            failure_history=[
+                EscalatedFailureAttempt(
+                    attempted_at=record.attempted_at.isoformat(),
+                    model_used=record.model_used,
+                    prompt_template=record.prompt_template,
+                    failure_reason=record.failure_reason,
+                    quality_scores=record.quality_scores,
+                    reviewer_feedback=record.reviewer_feedback,
+                )
+                for record in wi.failure_records
+            ],
         )
 
     # -------------------------------------------------------------------------
@@ -222,6 +314,13 @@ def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
     async def get_graph(
         center: uuid.UUID,
         radius: int = Query(default=2, ge=1, le=5),
+        edge_type: Optional[str] = Query(default=None),
+        min_confidence: float = Query(default=0.0, ge=0.0, le=1.0),
+        highlight_label: Optional[str] = Query(default=None),
+        layout: Literal["force-directed", "breadthfirst"] = Query(
+            default="force-directed"
+        ),
+        max_nodes: int = Query(default=500, ge=1, le=500),
     ) -> GraphResponse:
         """Return a subgraph rooted at ``center`` within ``radius`` hops.
 
@@ -229,16 +328,31 @@ def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
         decision: ``{nodes: [{data: {id, label, type}}], edges: [{data: {id,
         source, target, weight}}]}``.
         """
-        concepts = await asyncio.to_thread(store.traverse_graph, center, radius)
+        traversed = await asyncio.to_thread(store.traverse_graph, center, radius)
+        concepts = [
+            concept for concept in traversed if concept.confidence >= min_confidence
+        ][:max_nodes]
         concept_ids = {c.id for c in concepts}
 
         # Collect all edges whose both endpoints are in the subgraph
         all_edges = []
+        seen_edge_ids: set[uuid.UUID] = set()
         for concept in concepts:
             edges = await asyncio.to_thread(store.list_edges, concept.id)
             for edge in edges:
-                if edge.target_id in concept_ids and edge.id not in {e.id for e in all_edges}:
+                edge_matches_type = (
+                    edge_type is None
+                    or edge.edge_type == edge_type
+                    or edge.evidence_type == edge_type
+                )
+                if (
+                    edge.target_id in concept_ids
+                    and edge.confidence >= min_confidence
+                    and edge_matches_type
+                    and edge.id not in seen_edge_ids
+                ):
                     all_edges.append(edge)
+                    seen_edge_ids.add(edge.id)
 
         nodes = [
             CytoscapeNode(
@@ -246,6 +360,12 @@ def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
                     id=str(c.id),
                     label=c.name,
                     type=next(iter(c.labels), "concept") if c.labels else "concept",
+                    labels=sorted(c.labels),
+                    confidence=c.confidence,
+                    highlighted=bool(highlight_label and highlight_label in c.labels),
+                    confidence_bucket=_confidence_bucket(c.confidence),
+                    visual_opacity=_node_visuals(_confidence_bucket(c.confidence))[0],
+                    visual_color=_node_visuals(_confidence_bucket(c.confidence))[1],
                 )
             )
             for c in concepts
@@ -257,23 +377,70 @@ def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
                     source=str(e.source_id),
                     target=str(e.target_id),
                     weight=e.confidence,
+                    edge_type=e.edge_type,
+                    evidence_type=e.evidence_type,
+                    confidence=e.confidence,
+                    confidence_bucket=_confidence_bucket(e.confidence),
+                    visual_opacity=_edge_visuals(_confidence_bucket(e.confidence))[0],
+                    visual_line_style=_edge_visuals(_confidence_bucket(e.confidence))[1],
                 )
             )
             for e in all_edges
         ]
-        return GraphResponse(nodes=nodes, edges=edges_cy)
+        return GraphResponse(nodes=nodes, edges=edges_cy, layout=layout)
 
     @app.get(
         "/api/activity",
-        response_model=list[ActivityItem],
+        response_model=list[ActivityEntry],
         summary="Recent librarian iterations",
     )
     async def get_activity(
         limit: int = Query(default=20, ge=1, le=100),
-    ) -> list[ActivityItem]:
-        """Return the most recent librarian work items, newest first."""
-        items = await asyncio.to_thread(store.list_work_items, limit)
-        return [_to_activity_item(wi) for wi in items]
+    ) -> list[ActivityEntry]:
+        """Return the most recent librarian iterations, newest first."""
+        activities = await asyncio.to_thread(store.list_librarian_activities)
+        recent_activities = sorted(
+            activities, key=lambda activity: activity.created_at, reverse=True
+        )[:limit]
+
+        entries: list[ActivityEntry] = []
+        for activity in recent_activities:
+            work_item = None
+            concept = None
+            failure_record = None
+            co_regulation_scores = None
+
+            if activity.work_item_id is not None:
+                work_item = await asyncio.to_thread(store.get_work_item, activity.work_item_id)
+                if work_item is not None:
+                    concept = await asyncio.to_thread(store.get_concept, work_item.concept_id)
+                    matched_record = _select_failure_record_for_activity(
+                        work_item.failure_records, activity
+                    )
+                    if matched_record is not None:
+                        failure_record = _to_activity_failure_record(matched_record)
+                        co_regulation_scores = failure_record.quality_scores
+
+            entries.append(
+                ActivityEntry(
+                    id=activity.id,
+                    run_id=activity.run_id,
+                    iteration=activity.iteration,
+                    created_at=activity.created_at.isoformat(),
+                    status=activity.status,
+                    passed=activity.status == "success",
+                    failure_reason=activity.failure_reason,
+                    work_item=_to_activity_item(work_item) if work_item else None,
+                    concept=_to_activity_concept(concept) if concept else None,
+                    co_regulation_scores=co_regulation_scores,
+                    failure_record=failure_record,
+                    concepts_integrated=activity.concepts_integrated,
+                    edges_integrated=activity.edges_integrated,
+                    model_used=activity.model_used,
+                    duration_seconds=activity.duration_seconds,
+                )
+            )
+        return entries
 
     @app.get(
         "/api/health",
@@ -314,11 +481,22 @@ def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
             targets=HealthTargets(
                 coverage_target=0.80,
                 freshness_target=0.90,
-                blast_radius_target=0.80,
+                blast_radius_target=0.70,
             ),
             effective_weights=effective_weights,
             work_queue_depth=stats["pending"],
+            escalated_count=stats["escalated"],
         )
+
+    @app.get(
+        "/api/escalated-items",
+        response_model=list[EscalatedItemView],
+        summary="Escalated items with concept context and full failure history",
+    )
+    async def get_escalated_items_view() -> list[EscalatedItemView]:
+        """Return escalated work items for the dedicated escalated-items view."""
+        items = await asyncio.to_thread(store.get_escalated_items)
+        return [_to_escalated_item_view(item) for item in items]
 
     @app.get(
         "/api/review/error-types",

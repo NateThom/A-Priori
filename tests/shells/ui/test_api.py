@@ -1,11 +1,19 @@
-"""Tests for read-only Graph API (Story 11.2a).
+"""Tests for read-only Graph API, activity feed endpoints, and Health Dashboard (Story 11.6).
 
 AC traceability:
 - AC-1: GET /api/concepts with filters returns filtered concepts.
 - AC-2: GET /api/concepts/{id} returns full concept with edges and impact profile.
 - AC-3: GET /api/graph?center={id}&radius=2 returns Cytoscape-format subgraph.
 - AC-4: GET /api/activity?limit=20 returns 20 most recent librarian iterations.
+- AC-6: Activity entries show work item, concept, co-regulation scores (if any), pass/fail,
+        and failure reason on failures.
+- AC-7: Failed entries expose full FailureRecord including reviewer_feedback.
 - AC-5: GET /api/health returns metrics, targets, effective weights, queue depth.
+- AC-6 (Story 11.6): Health dashboard shows three metrics vs. targets (coverage 80%,
+  freshness 90%, blast radius 70%), effective weights, work queue depth, and escalated
+  count. Refreshing the endpoint yields updated values.
+- AC-6: GET /api/escalated-items returns escalated items with associated concepts
+  and full failure history for the escalated-items view.
 """
 
 import uuid
@@ -20,6 +28,7 @@ from apriori.config import Config
 from apriori.models.concept import CodeReference, Concept
 from apriori.models.edge import Edge
 from apriori.models.impact import ImpactProfile, ImpactEntry
+from apriori.models.librarian_activity import LibrarianActivity
 from apriori.models.review_outcome import ReviewOutcome
 from apriori.models.work_item import FailureRecord, WorkItem
 from apriori.storage.protocol import KnowledgeStore
@@ -38,6 +47,7 @@ class _TestStore:
         self._concepts: dict[uuid.UUID, Concept] = {}
         self._edges: dict[uuid.UUID, Edge] = {}
         self._work_items: dict[uuid.UUID, WorkItem] = {}
+        self._librarian_activities: list[LibrarianActivity] = []
         self._review_outcomes: list[ReviewOutcome] = []
 
     # --- Concept CRUD ---
@@ -124,6 +134,20 @@ class _TestStore:
             reverse=True,
         )
         return items[:limit]
+
+    # --- Librarian Activity operations ---
+
+    def create_librarian_activity(self, activity: LibrarianActivity) -> LibrarianActivity:
+        self._librarian_activities.append(activity)
+        return activity
+
+    def list_librarian_activities(
+        self, run_id: Optional[uuid.UUID] = None
+    ) -> list[LibrarianActivity]:
+        activities = list(self._librarian_activities)
+        if run_id is not None:
+            activities = [activity for activity in activities if activity.run_id == run_id]
+        return sorted(activities, key=lambda activity: activity.iteration)
 
     def record_failure(
         self, work_item_id: uuid.UUID, record: FailureRecord
@@ -321,12 +345,20 @@ def _make_concept(name: str = "TestConcept", labels: set[str] | None = None) -> 
     )
 
 
-def _make_edge(source_id: uuid.UUID, target_id: uuid.UUID) -> Edge:
+def _make_edge(
+    source_id: uuid.UUID,
+    target_id: uuid.UUID,
+    *,
+    edge_type: str = "depends-on",
+    evidence_type: str = "semantic",
+    confidence: float = 1.0,
+) -> Edge:
     return Edge(
         source_id=source_id,
         target_id=target_id,
-        edge_type="depends-on",
-        evidence_type="semantic",
+        edge_type=edge_type,
+        evidence_type=evidence_type,  # type: ignore[arg-type]
+        confidence=confidence,
     )
 
 
@@ -335,6 +367,30 @@ def _make_work_item(concept_id: uuid.UUID, description: str = "Work item") -> Wo
         item_type="verify_concept",
         concept_id=concept_id,
         description=description,
+    )
+
+
+def _make_failure_record(
+    *,
+    attempted_at: datetime,
+    model_used: str,
+    failure_reason: str,
+    specificity: float,
+    corroboration: float,
+    completeness: float,
+    reviewer_feedback: str,
+) -> FailureRecord:
+    return FailureRecord(
+        attempted_at=attempted_at,
+        model_used=model_used,
+        prompt_template="default",
+        failure_reason=failure_reason,
+        quality_scores={
+            "specificity": specificity,
+            "structural_corroboration": corroboration,
+            "completeness": completeness,
+        },
+        reviewer_feedback=reviewer_feedback,
     )
 
 
@@ -472,6 +528,33 @@ class TestGetConcept:
         assert data["impact_profile"] is not None
         assert len(data["impact_profile"]["structural_impact"]) == 1
 
+    def test_includes_code_references_for_click_to_inspect(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """Given concept references, detail payload includes full code references."""
+        concept = Concept(
+            name="Inspectable",
+            description="For click detail.",
+            created_by="agent",
+            code_references=[
+                CodeReference(
+                    symbol="pkg.module.inspectable",
+                    file_path="src/pkg/module.py",
+                    line_range=(10, 32),
+                    content_hash="a" * 64,
+                    semantic_anchor="function inspectable",
+                )
+            ],
+        )
+        store.create_concept(concept)
+
+        response = client.get(f"/api/concepts/{concept.id}")
+        assert response.status_code == 200
+        data = response.json()
+        assert "code_references" in data
+        assert len(data["code_references"]) == 1
+        assert data["code_references"][0]["file_path"] == "src/pkg/module.py"
+
     def test_returns_concept_with_no_edges(
         self, client: TestClient, store: _TestStore
     ) -> None:
@@ -589,6 +672,143 @@ class TestGetGraph:
         assert data["edges"] == []
 
 
+class TestGetGraphVisualizationFilters:
+    def test_filter_by_edge_type_structural_only(self, client: TestClient, store: _TestStore) -> None:
+        """Edge filter keeps only structural relationships in graph payload."""
+        center = _make_concept("Center")
+        structural_target = _make_concept("StructuralTarget")
+        semantic_target = _make_concept("SemanticTarget")
+        store.create_concept(center)
+        store.create_concept(structural_target)
+        store.create_concept(semantic_target)
+        store.create_edge(
+            _make_edge(
+                center.id,
+                structural_target.id,
+                edge_type="calls",
+                evidence_type="structural",
+                confidence=0.9,
+            )
+        )
+        store.create_edge(
+            _make_edge(
+                center.id,
+                semantic_target.id,
+                edge_type="depends-on",
+                evidence_type="semantic",
+                confidence=0.9,
+            )
+        )
+
+        response = client.get(f"/api/graph?center={center.id}&radius=2&edge_type=structural")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["edges"]) == 1
+        assert data["edges"][0]["data"]["evidence_type"] == "structural"
+
+    def test_filter_by_min_confidence_applies_to_nodes_and_edges(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """min_confidence removes low-confidence nodes and low-confidence edges."""
+        center = Concept(
+            name="Center",
+            description="center",
+            created_by="agent",
+            confidence=0.95,
+        )
+        high = Concept(
+            name="High",
+            description="high",
+            created_by="agent",
+            confidence=0.8,
+        )
+        low = Concept(
+            name="Low",
+            description="low",
+            created_by="agent",
+            confidence=0.3,
+        )
+        store.create_concept(center)
+        store.create_concept(high)
+        store.create_concept(low)
+        store.create_edge(_make_edge(center.id, high.id, confidence=0.85))
+        store.create_edge(_make_edge(center.id, low.id, confidence=0.65))
+
+        response = client.get(f"/api/graph?center={center.id}&radius=2&min_confidence=0.7")
+        assert response.status_code == 200
+        data = response.json()
+        node_ids = {n["data"]["id"] for n in data["nodes"]}
+        assert str(center.id) in node_ids
+        assert str(high.id) in node_ids
+        assert str(low.id) not in node_ids
+        assert len(data["edges"]) == 1
+        assert data["edges"][0]["data"]["target"] == str(high.id)
+
+    def test_label_filter_highlights_matching_nodes(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """highlight_label marks matching concepts without removing others."""
+        center = _make_concept("Center")
+        needs_review = _make_concept("NeedsReview", labels={"needs-review"})
+        other = _make_concept("Other", labels={"verified"})
+        store.create_concept(center)
+        store.create_concept(needs_review)
+        store.create_concept(other)
+        store.create_edge(_make_edge(center.id, needs_review.id, confidence=0.9))
+        store.create_edge(_make_edge(center.id, other.id, confidence=0.9))
+
+        response = client.get(
+            f"/api/graph?center={center.id}&radius=2&highlight_label=needs-review"
+        )
+        assert response.status_code == 200
+        data = response.json()
+        highlighted = {
+            n["data"]["label"]: n["data"]["highlighted"] for n in data["nodes"]
+        }
+        assert highlighted["NeedsReview"] is True
+        assert highlighted["Other"] is False
+
+    def test_high_and_low_confidence_are_visually_distinct(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """High and low confidence nodes expose different visual styling metadata."""
+        center = _make_concept("Center")
+        high = Concept(name="High", description="high", created_by="agent", confidence=0.9)
+        low = Concept(name="Low", description="low", created_by="agent", confidence=0.3)
+        store.create_concept(center)
+        store.create_concept(high)
+        store.create_concept(low)
+        store.create_edge(_make_edge(center.id, high.id, confidence=0.9))
+        store.create_edge(_make_edge(center.id, low.id, confidence=0.3))
+
+        response = client.get(f"/api/graph?center={center.id}&radius=2")
+        assert response.status_code == 200
+        data = response.json()
+        nodes = {n["data"]["label"]: n["data"] for n in data["nodes"]}
+        assert nodes["High"]["confidence_bucket"] != nodes["Low"]["confidence_bucket"]
+        assert nodes["High"]["visual_opacity"] != nodes["Low"]["visual_opacity"]
+
+    def test_layout_defaults_force_directed_and_supports_toggle(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """Graph response declares default layout and supports explicit override."""
+        center = _make_concept("Center")
+        neighbor = _make_concept("Neighbor")
+        store.create_concept(center)
+        store.create_concept(neighbor)
+        store.create_edge(_make_edge(center.id, neighbor.id))
+
+        default_response = client.get(f"/api/graph?center={center.id}&radius=2")
+        assert default_response.status_code == 200
+        assert default_response.json()["layout"] == "force-directed"
+
+        override_response = client.get(
+            f"/api/graph?center={center.id}&radius=2&layout=breadthfirst"
+        )
+        assert override_response.status_code == 200
+        assert override_response.json()["layout"] == "breadthfirst"
+
+
 # ---------------------------------------------------------------------------
 # AC-4: GET /api/activity?limit=20
 # ---------------------------------------------------------------------------
@@ -601,46 +821,64 @@ class TestGetActivity:
         assert response.status_code == 200
         assert response.json() == []
 
-    def test_returns_work_items_ordered_by_created_at_desc(
+    def test_returns_iterations_ordered_reverse_chronological(
         self, client: TestClient, store: _TestStore
     ) -> None:
-        """Work items are returned most-recent first."""
+        """Iterations are returned newest-first when activity feed loads."""
         concept = _make_concept("C")
         store.create_concept(concept)
-        wi1 = WorkItem(
+        wi = WorkItem(
             item_type="verify_concept",
             concept_id=concept.id,
-            description="First",
+            description="Analyze concept C",
+        )
+        store.create_work_item(wi)
+
+        run_id = uuid.uuid4()
+        older = LibrarianActivity(
+            run_id=run_id,
+            iteration=0,
+            work_item_id=wi.id,
+            status="success",
             created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
         )
-        wi2 = WorkItem(
-            item_type="verify_concept",
-            concept_id=concept.id,
-            description="Second",
+        newer = LibrarianActivity(
+            run_id=run_id,
+            iteration=1,
+            work_item_id=wi.id,
+            status="success",
             created_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
         )
-        store.create_work_item(wi1)
-        store.create_work_item(wi2)
+        store.create_librarian_activity(older)
+        store.create_librarian_activity(newer)
 
         response = client.get("/api/activity?limit=20")
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 2
-        assert data[0]["description"] == "Second"
-        assert data[1]["description"] == "First"
+        assert data[0]["iteration"] == 1
+        assert data[1]["iteration"] == 0
 
     def test_limit_parameter_caps_result_count(
         self, client: TestClient, store: _TestStore
     ) -> None:
-        """GET /api/activity?limit=1 returns at most 1 item."""
+        """GET /api/activity?limit=1 returns at most 1 activity entry."""
         concept = _make_concept("C")
         store.create_concept(concept)
+        wi = WorkItem(
+            item_type="verify_concept",
+            concept_id=concept.id,
+            description="Analyze concept C",
+        )
+        store.create_work_item(wi)
+        run_id = uuid.uuid4()
         for i in range(5):
-            store.create_work_item(
-                WorkItem(
-                    item_type="verify_concept",
-                    concept_id=concept.id,
-                    description=f"Item {i}",
+            store.create_librarian_activity(
+                LibrarianActivity(
+                    run_id=run_id,
+                    iteration=i,
+                    work_item_id=wi.id,
+                    status="success",
                 )
             )
 
@@ -651,15 +889,23 @@ class TestGetActivity:
     def test_default_limit_is_20(
         self, client: TestClient, store: _TestStore
     ) -> None:
-        """GET /api/activity with no limit param returns at most 20 items."""
+        """GET /api/activity with no limit param returns at most 20 entries."""
         concept = _make_concept("C")
         store.create_concept(concept)
+        wi = WorkItem(
+            item_type="verify_concept",
+            concept_id=concept.id,
+            description="Analyze concept C",
+        )
+        store.create_work_item(wi)
+        run_id = uuid.uuid4()
         for i in range(25):
-            store.create_work_item(
-                WorkItem(
-                    item_type="verify_concept",
-                    concept_id=concept.id,
-                    description=f"Item {i}",
+            store.create_librarian_activity(
+                LibrarianActivity(
+                    run_id=run_id,
+                    iteration=i,
+                    work_item_id=wi.id,
+                    status="success",
                 )
             )
 
@@ -667,14 +913,38 @@ class TestGetActivity:
         assert response.status_code == 200
         assert len(response.json()) == 20
 
-    def test_activity_item_contains_required_fields(
+    def test_activity_entry_contains_required_display_fields(
         self, client: TestClient, store: _TestStore
     ) -> None:
-        """Each activity item includes id, item_type, concept_id, description, created_at."""
+        """Each entry shows work item, concept, pass/fail status, and failure reason on failure."""
         concept = _make_concept("C")
         store.create_concept(concept)
         wi = _make_work_item(concept.id, "Check this concept.")
         store.create_work_item(wi)
+
+        failure = FailureRecord(
+            attempted_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            model_used="claude-sonnet",
+            prompt_template="level15_co_regulation_v1",
+            failure_reason="Specificity too low",
+            quality_scores={
+                "specificity": 0.2,
+                "structural_corroboration": 0.6,
+                "completeness": 0.4,
+            },
+            reviewer_feedback="Use concrete data flow details.",
+        )
+        wi = store.record_failure(wi.id, failure)
+        store.update_work_item(wi)
+        store.create_librarian_activity(
+            LibrarianActivity(
+                run_id=uuid.uuid4(),
+                iteration=0,
+                work_item_id=wi.id,
+                status="level15_failure",
+                failure_reason="Specificity too low",
+            )
+        )
 
         response = client.get("/api/activity?limit=20")
         assert response.status_code == 200
@@ -682,9 +952,57 @@ class TestGetActivity:
         assert len(data) == 1
         item = data[0]
         assert "id" in item
-        assert item["item_type"] == "verify_concept"
-        assert item["concept_id"] == str(concept.id)
-        assert "created_at" in item
+        assert item["status"] == "level15_failure"
+        assert item["passed"] is False
+        assert item["failure_reason"] == "Specificity too low"
+        assert item["work_item"]["item_type"] == "verify_concept"
+        assert item["work_item"]["description"] == "Check this concept."
+        assert item["concept"]["id"] == str(concept.id)
+        assert item["co_regulation_scores"]["specificity"] == 0.2
+
+    def test_failed_entry_includes_full_failure_record_for_expansion(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """Failed iteration includes full FailureRecord with reviewer_feedback."""
+        concept = _make_concept("C")
+        store.create_concept(concept)
+        wi = _make_work_item(concept.id, "Check this concept.")
+        store.create_work_item(wi)
+
+        failure = FailureRecord(
+            attempted_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            model_used="claude-sonnet",
+            prompt_template="level15_co_regulation_v1",
+            failure_reason="Completeness score below threshold",
+            quality_scores={
+                "specificity": 0.6,
+                "structural_corroboration": 0.7,
+                "completeness": 0.2,
+            },
+            reviewer_feedback="Document return-value edge cases.",
+        )
+        wi = store.record_failure(wi.id, failure)
+        store.update_work_item(wi)
+        store.create_librarian_activity(
+            LibrarianActivity(
+                run_id=uuid.uuid4(),
+                iteration=3,
+                work_item_id=wi.id,
+                status="level15_failure",
+                failure_reason="Completeness score below threshold",
+            )
+        )
+
+        response = client.get("/api/activity?limit=20")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        record = data[0]["failure_record"]
+        assert record["failure_reason"] == "Completeness score below threshold"
+        assert record["model_used"] == "claude-sonnet"
+        assert record["prompt_template"] == "level15_co_regulation_v1"
+        assert record["quality_scores"]["completeness"] == 0.2
+        assert record["reviewer_feedback"] == "Document return-value edge cases."
 
 
 # ---------------------------------------------------------------------------
@@ -851,3 +1169,269 @@ class TestReviewWorkflowUI:
         data = response.json()
         assert "error_types" in data
         assert "description_wrong" in data["error_types"]
+
+
+# ---------------------------------------------------------------------------
+# AC-6: GET /api/escalated-items
+# ---------------------------------------------------------------------------
+
+
+class TestGetEscalatedItemsView:
+    def test_lists_all_escalated_items_with_description_and_associated_concept(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """Given 5 escalated work items, all 5 include description + concept context."""
+        for i in range(5):
+            concept = _make_concept(name=f"Concept {i}", labels={"needs-human-review"})
+            store.create_concept(concept)
+            item = store.create_work_item(
+                WorkItem(
+                    item_type="verify_concept",
+                    concept_id=concept.id,
+                    description=f"Escalated item {i}",
+                    failure_count=3,
+                )
+            )
+            store.escalate_work_item(item.id)
+
+        response = client.get("/api/escalated-items")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 5
+        for row in data:
+            assert row["description"].startswith("Escalated item ")
+            assert row["associated_concept"]["id"]
+            assert row["associated_concept"]["name"].startswith("Concept ")
+
+    def test_includes_full_failure_history_with_model_reason_scores_and_feedback(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """Given an escalated item, response includes full per-attempt failure history."""
+        concept = _make_concept(name="Payments")
+        store.create_concept(concept)
+        item = store.create_work_item(
+            WorkItem(
+                item_type="verify_concept",
+                concept_id=concept.id,
+                description="Escalated payments work item",
+            )
+        )
+
+        first = _make_failure_record(
+            attempted_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            model_used="claude-sonnet-4-20250514",
+            failure_reason="Level 1.5: specificity below threshold",
+            specificity=0.2,
+            corroboration=0.9,
+            completeness=0.6,
+            reviewer_feedback="Missing concrete payment constraints from code.",
+        )
+        second = _make_failure_record(
+            attempted_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            model_used="claude-sonnet-4-20250514",
+            failure_reason="Level 1.5: specificity below threshold",
+            specificity=0.25,
+            corroboration=0.85,
+            completeness=0.6,
+            reviewer_feedback="Still generic; include amount limits and currency logic.",
+        )
+        third = _make_failure_record(
+            attempted_at=datetime(2026, 1, 3, tzinfo=timezone.utc),
+            model_used="claude-sonnet-4-20250514",
+            failure_reason="Level 1.5: specificity below threshold",
+            specificity=0.28,
+            corroboration=0.82,
+            completeness=0.61,
+            reviewer_feedback="Name exact functions and validation branches.",
+        )
+
+        store.record_failure(item.id, first)
+        store.record_failure(item.id, second)
+        store.record_failure(item.id, third)
+        store.escalate_work_item(item.id)
+
+        response = client.get("/api/escalated-items")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+
+        history = data[0]["failure_history"]
+        assert len(history) == 3
+        assert history[0]["model_used"] == "claude-sonnet-4-20250514"
+        assert "specificity below threshold" in history[0]["failure_reason"]
+        assert history[0]["quality_scores"]["specificity"] == 0.2
+        assert history[0]["reviewer_feedback"] == "Missing concrete payment constraints from code."
+
+    def test_failure_history_preserves_attempt_variation_for_pattern_diagnosis(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """Failure history retains varied attempts to support failure-pattern analysis."""
+        concept = _make_concept(name="Auth")
+        store.create_concept(concept)
+        item = store.create_work_item(
+            WorkItem(
+                item_type="verify_concept",
+                concept_id=concept.id,
+                description="Escalated auth work item",
+            )
+        )
+        store.record_failure(
+            item.id,
+            _make_failure_record(
+                attempted_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+                model_used="claude-sonnet-4-20250514",
+                failure_reason="Level 1.5: specificity below threshold",
+                specificity=0.30,
+                corroboration=0.90,
+                completeness=0.72,
+                reviewer_feedback="Description too generic.",
+            ),
+        )
+        store.record_failure(
+            item.id,
+            _make_failure_record(
+                attempted_at=datetime(2026, 2, 2, tzinfo=timezone.utc),
+                model_used="qwen2.5:7b",
+                failure_reason="Level 1.5: structural corroboration below threshold",
+                specificity=0.75,
+                corroboration=0.12,
+                completeness=0.80,
+                reviewer_feedback="Relationship claims not grounded in code.",
+            ),
+        )
+        store.record_failure(
+            item.id,
+            _make_failure_record(
+                attempted_at=datetime(2026, 2, 3, tzinfo=timezone.utc),
+                model_used="claude-sonnet-4-20250514",
+                failure_reason="Level 1: generic description",
+                specificity=0.35,
+                corroboration=0.70,
+                completeness=0.50,
+                reviewer_feedback="Use repository-specific terminology.",
+            ),
+        )
+        store.escalate_work_item(item.id)
+
+        response = client.get("/api/escalated-items")
+        assert response.status_code == 200
+        data = response.json()
+        history = data[0]["failure_history"]
+        models = {attempt["model_used"] for attempt in history}
+        reasons = {attempt["failure_reason"] for attempt in history}
+        assert models == {"claude-sonnet-4-20250514", "qwen2.5:7b"}
+        assert len(reasons) == 3
+
+
+# ---------------------------------------------------------------------------
+# AC-6 (Story 11.6): Health Dashboard — metric targets, escalated count, refresh
+# ---------------------------------------------------------------------------
+
+
+class TestHealthDashboard:
+    """Story 11.6: single-glance health dashboard for engineering leads."""
+
+    def test_coverage_target_is_eighty_percent(self, client: TestClient) -> None:
+        """AC-1: coverage target must be 0.80 (80%)."""
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        assert response.json()["targets"]["coverage_target"] == pytest.approx(0.80)
+
+    def test_freshness_target_is_ninety_percent(self, client: TestClient) -> None:
+        """AC-1: freshness target must be 0.90 (90%)."""
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        assert response.json()["targets"]["freshness_target"] == pytest.approx(0.90)
+
+    def test_blast_radius_target_is_seventy_percent(self, client: TestClient) -> None:
+        """AC-1: blast radius completeness target must be 0.70 (70%)."""
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        assert response.json()["targets"]["blast_radius_target"] == pytest.approx(0.70)
+
+    def test_health_contains_escalated_count(self, client: TestClient) -> None:
+        """AC-3: Health response contains an escalated_count field."""
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        assert "escalated_count" in response.json()
+
+    def test_escalated_count_zero_when_no_escalations(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """AC-3: escalated_count is 0 when no items are escalated."""
+        concept = _make_concept("C")
+        store.create_concept(concept)
+        store.create_work_item(_make_work_item(concept.id))
+
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        assert response.json()["escalated_count"] == 0
+
+    def test_escalated_count_reflects_escalated_items(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """AC-3: escalated_count matches the actual number of escalated work items."""
+        concept = _make_concept("C")
+        store.create_concept(concept)
+        wi1 = _make_work_item(concept.id)
+        wi2 = _make_work_item(concept.id, "Second item")
+        store.create_work_item(wi1)
+        store.create_work_item(wi2)
+        store.escalate_work_item(wi1.id)
+
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["escalated_count"] == 1
+        assert data["work_queue_depth"] == 2
+
+    def test_effective_weights_include_all_six_factors(
+        self, client: TestClient
+    ) -> None:
+        """AC-2: effective_weights contains all six priority factors."""
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        weights = response.json()["effective_weights"]
+        expected_factors = {
+            "coverage_gap",
+            "needs_review",
+            "developer_proximity",
+            "git_activity",
+            "staleness",
+            "failure_urgency",
+        }
+        assert expected_factors == set(weights.keys())
+
+    def test_refresh_shows_updated_queue_depth(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """AC-4: After adding a new work item, a fresh request shows updated depth."""
+        concept = _make_concept("C")
+        store.create_concept(concept)
+
+        response1 = client.get("/api/health")
+        assert response1.status_code == 200
+        initial_depth = response1.json()["work_queue_depth"]
+
+        store.create_work_item(_make_work_item(concept.id))
+
+        response2 = client.get("/api/health")
+        assert response2.status_code == 200
+        assert response2.json()["work_queue_depth"] == initial_depth + 1
+
+    def test_refresh_shows_updated_escalated_count(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """AC-4: After escalating a work item, a fresh request shows updated escalated_count."""
+        concept = _make_concept("C")
+        store.create_concept(concept)
+        wi = _make_work_item(concept.id)
+        store.create_work_item(wi)
+
+        response1 = client.get("/api/health")
+        assert response1.json()["escalated_count"] == 0
+
+        store.escalate_work_item(wi.id)
+
+        response2 = client.get("/api/health")
+        assert response2.json()["escalated_count"] == 1

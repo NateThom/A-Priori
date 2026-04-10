@@ -30,7 +30,6 @@ Usage::
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 import uuid
@@ -38,9 +37,15 @@ from typing import Callable, Optional
 
 from apriori.adapters.base import LLMAdapter
 from apriori.config import Config
-from apriori.knowledge.integrator import IntegrationDecisionTree
+from apriori.knowledge.integrator import IntegrationAction, IntegrationDecisionTree
+from apriori.librarian.budget import TokenBudgetManager
+from apriori.librarian.prompt_templates import (
+    build_librarian_prompt,
+    parse_librarian_response,
+)
 from apriori.models.librarian_activity import LibrarianActivity
 from apriori.models.librarian_output import LibrarianOutput
+from apriori.models.run_telemetry import RunTelemetry
 from apriori.models.work_item import WorkItem
 from apriori.quality.failure_management import (
     failure_record_from_level15,
@@ -54,47 +59,6 @@ from apriori.quality.priority import BasePriorityEngine
 from apriori.storage.protocol import KnowledgeStore
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Prompt templates
-# ---------------------------------------------------------------------------
-
-_ANALYSIS_PROMPT_TEMPLATE = """\
-Analyze the following code and identify all key concepts and relationships.
-
-File: {file_path}
-
-```python
-{code_content}
-```
-
-Instructions:
-- Identify all key concepts (classes, functions, modules) with specific, detailed descriptions.
-- Descriptions must be at least 50 characters and describe THIS specific code, not generic boilerplate.
-- Include specific parameter behaviors, error conditions, and return value semantics.
-- Identify relationships between concepts using only these edge types: depends-on, implements, \
-relates-to, shares-assumption-about, extends, supersedes, owned-by.
-{failure_context}
-Respond with valid JSON only (no preamble, no markdown fences):
-{{
-  "concepts": [
-    {{
-      "name": "ExactConceptName",
-      "description": "Specific description with parameter behaviors and return value semantics",
-      "confidence": 0.9,
-      "code_references": []
-    }}
-  ],
-  "edges": []
-}}"""
-
-_FAILURE_CONTEXT_TEMPLATE = """\
-
-## Previous Analysis Failures (Retry Context)
-Address these failures in your analysis — be specific and avoid generic descriptions:
-{failures}
-"""
-
 
 # ---------------------------------------------------------------------------
 # LibrarianLoop
@@ -146,10 +110,13 @@ class LibrarianLoop:
     # Public API
     # -------------------------------------------------------------------------
 
-    async def run(self, iterations: int) -> list[LibrarianActivity]:
+    async def run(self, iterations: int) -> tuple[list[LibrarianActivity], RunTelemetry]:
         """Execute up to ``iterations`` librarian iterations.
 
-        Stops early if the work queue empties before ``iterations`` is reached.
+        Stops early if:
+        - The work queue empties before ``iterations`` is reached.
+        - The token budget would be exceeded by the next iteration (AC-1).
+
         Each iteration reads fresh state from the store — no state is carried
         between iterations (arch:librarian-loop).
 
@@ -157,10 +124,18 @@ class LibrarianLoop:
             iterations: Maximum number of iterations to execute.
 
         Returns:
-            A list of :class:`LibrarianActivity` records, one per executed
-            iteration (including iterations that ended in quality failures).
-            Returns an empty list when the queue is immediately empty.
+            A ``(activity_records, telemetry)`` tuple. ``activity_records``
+            contains one :class:`LibrarianActivity` per executed iteration
+            (including iterations that ended in quality failures). ``telemetry``
+            contains aggregated run statistics (AC-5).
         """
+        telemetry = RunTelemetry()
+        co_reg_enabled = self._config.quality.co_regulation.enabled
+        budget_manager = TokenBudgetManager(
+            self._config.budget,
+            co_regulation_enabled=co_reg_enabled,
+        )
+
         # Pre-run hook (AC-9)
         if self._pre_run_hook is not None:
             self._pre_run_hook()
@@ -177,19 +152,31 @@ class LibrarianLoop:
         initial_pending = self._store.get_pending_work_items()
         if not initial_pending:
             logger.info("No unresolved work items")
-            return []
+            return [], telemetry
 
         claimed: set[uuid.UUID] = set()
         lock = asyncio.Lock()
         activity_records: list[LibrarianActivity] = []
         claimed_iterations = 0
+        budget_halted = False
 
         async def _worker() -> None:
-            nonlocal claimed_iterations
+            nonlocal claimed_iterations, budget_halted
             while True:
                 # Fresh read for every iteration claim (AC-7).
                 async with lock:
                     if claimed_iterations >= iterations:
+                        return
+
+                    # Budget check before starting next iteration (AC-1).
+                    if budget_manager.should_halt_before_iteration():
+                        budget_halted = True
+                        logger.info(
+                            "Token budget halt: %d tokens used, estimated next iteration "
+                            "cost would exceed per-run limit of %d tokens.",
+                            budget_manager.total_tokens,
+                            self._config.budget.max_tokens_per_run,
+                        )
                         return
 
                     pending = self._store.get_pending_work_items()
@@ -202,7 +189,7 @@ class LibrarianLoop:
                     iteration = claimed_iterations
                     claimed_iterations += 1
 
-                activity = await self._run_iteration(
+                activity, tokens_used, detail = await self._run_iteration(
                     run_id=run_id, iteration=iteration, work_item=work_item
                 )
 
@@ -211,11 +198,44 @@ class LibrarianLoop:
                     activity_records.append(activity)
                     # Persist activity record (AC-8)
                     self._store.create_librarian_activity(activity)
+                    # Update budget tracking
+                    budget_manager.record_iteration(tokens_used)
+                    # Update telemetry
+                    telemetry.total_tokens += tokens_used
+                    telemetry.total_iterations += 1
+                    if activity.status == "success":
+                        telemetry.work_items_resolved += 1
+                        telemetry.concepts_created += detail.get("concepts_created", 0)
+                        telemetry.concepts_updated += detail.get("concepts_updated", 0)
+                        telemetry.edges_created += detail.get("edges_created", 0)
+                        telemetry.edges_updated += detail.get("edges_updated", 0)
+                    elif activity.status in ("level1_failure", "level15_failure", "error"):
+                        telemetry.work_items_failed += 1
 
         concurrency = min(iterations, len(initial_pending))
         tasks = [_worker() for _ in range(concurrency)]
         await asyncio.gather(*tasks)
-        return activity_records
+
+        # Count escalations from the work items processed this run
+        telemetry.work_items_escalated = sum(
+            1
+            for act in activity_records
+            if act.work_item_id is not None
+            and self._store.get_work_item(act.work_item_id) is not None
+            and self._store.get_work_item(act.work_item_id).escalated
+        )
+
+        logger.info(
+            "Run complete: %d iterations, %d tokens, %d resolved, %d failed, "
+            "%.2f iteration yield.",
+            telemetry.total_iterations,
+            telemetry.total_tokens,
+            telemetry.work_items_resolved,
+            telemetry.work_items_failed,
+            telemetry.iteration_yield,
+        )
+
+        return activity_records, telemetry
 
     # -------------------------------------------------------------------------
     # Work item selection
@@ -278,34 +298,59 @@ class LibrarianLoop:
         run_id: uuid.UUID,
         iteration: int,
         work_item: WorkItem,
-    ) -> LibrarianActivity:
+    ) -> tuple[LibrarianActivity, int, dict]:
         """Execute one librarian iteration end-to-end.
 
-        Returns a :class:`LibrarianActivity` record capturing the outcome. The
-        record is always returned (and persisted by the caller), even on failure.
+        Returns:
+            A ``(activity, tokens_used, detail)`` tuple. ``activity`` captures
+            the iteration outcome. ``tokens_used`` is the total tokens consumed
+            (analysis + co-regulation). ``detail`` contains fine-grained counts
+            for telemetry (concepts_created, concepts_updated, etc.).
         """
         start_time = time.monotonic()
         model_info = self._adapter.get_model_info()
+        tokens_used = 0
+        detail: dict = {}
 
         # Step 1: Load code from disk
         code_content = self._load_code(work_item)
+        concept = self._store.get_concept(work_item.concept_id)
+        structural_context = self._build_structural_context(concept)
 
         # Step 2: Build prompt (include failure history on retry — AC-5)
-        prompt = self._build_prompt(work_item, code_content)
+        # Apply per-iteration token limit: truncate graph context if needed (AC-2).
+        prompt = self._build_prompt(
+            work_item=work_item,
+            code_content=code_content,
+            structural_context=structural_context,
+            provider=model_info.provider,
+        )
+        prompt = self._maybe_truncate_prompt(
+            prompt=prompt,
+            code_content=code_content,
+            work_item=work_item,
+            provider=model_info.provider,
+            iteration=iteration,
+        )
 
         # Step 3: LLM analysis call
         try:
             llm_result = await self._adapter.analyze(prompt, context="")
+            tokens_used += llm_result.tokens_used
         except Exception as exc:  # noqa: BLE001
             logger.warning("Iteration %d: LLM call failed: %s", iteration, exc)
-            return LibrarianActivity(
-                run_id=run_id,
-                iteration=iteration,
-                work_item_id=work_item.id,
-                status="error",
-                model_used=model_info.name,
-                duration_seconds=time.monotonic() - start_time,
-                failure_reason=f"LLM call failed: {exc}",
+            return (
+                LibrarianActivity(
+                    run_id=run_id,
+                    iteration=iteration,
+                    work_item_id=work_item.id,
+                    status="error",
+                    model_used=model_info.name,
+                    duration_seconds=time.monotonic() - start_time,
+                    failure_reason=f"LLM call failed: {exc}",
+                ),
+                tokens_used,
+                detail,
             )
 
         # Step 4: Parse LLM response
@@ -324,27 +369,32 @@ class LibrarianLoop:
                 iteration,
                 level1_result.failure_record.failure_reason,
             )
-            return LibrarianActivity(
-                run_id=run_id,
-                iteration=iteration,
-                work_item_id=work_item.id,
-                status="level1_failure",
-                model_used=model_info.name,
-                duration_seconds=time.monotonic() - start_time,
-                failure_reason=level1_result.failure_record.failure_reason,
+            return (
+                LibrarianActivity(
+                    run_id=run_id,
+                    iteration=iteration,
+                    work_item_id=work_item.id,
+                    status="level1_failure",
+                    model_used=model_info.name,
+                    duration_seconds=time.monotonic() - start_time,
+                    failure_reason=level1_result.failure_record.failure_reason,
+                ),
+                tokens_used,
+                detail,
             )
 
-        # Step 6: Level 1.5 co-regulation review (AC-4)
-        concept = self._store.get_concept(work_item.concept_id)
-        structural_context = self._build_structural_context(concept)
-
-        assessment = await check_level15(
+        # Step 6: Level 1.5 co-regulation review (AC-4).
+        # IMPORTANT: the review call is ALWAYS made when co-regulation is enabled,
+        # even if doing so would push past the per-run token budget (arch:quality-invariant).
+        assessment, coreg_tokens = await check_level15(
             librarian_output=level1_result.adjusted_output,
             code_snippet=code_content,
             structural_context=structural_context,
             adapter=self._adapter,
             config=self._config.quality.co_regulation,
         )
+        # co-regulation tokens are charged regardless of outcome (AC-4)
+        tokens_used += coreg_tokens
 
         if not assessment.composite_pass:
             failure_record = failure_record_from_level15(
@@ -360,18 +410,22 @@ class LibrarianLoop:
                 iteration,
                 failure_record.failure_reason,
             )
-            return LibrarianActivity(
-                run_id=run_id,
-                iteration=iteration,
-                work_item_id=work_item.id,
-                status="level15_failure",
-                model_used=model_info.name,
-                duration_seconds=time.monotonic() - start_time,
-                failure_reason=failure_record.failure_reason,
+            return (
+                LibrarianActivity(
+                    run_id=run_id,
+                    iteration=iteration,
+                    work_item_id=work_item.id,
+                    status="level15_failure",
+                    model_used=model_info.name,
+                    duration_seconds=time.monotonic() - start_time,
+                    failure_reason=failure_record.failure_reason,
+                ),
+                tokens_used,
+                detail,
             )
 
         # Step 7: Integrate output into knowledge graph
-        concepts_integrated, edges_integrated = self._integrate_output(
+        concepts_integrated, edges_integrated, detail = self._integrate_output(
             level1_result.adjusted_output
         )
 
@@ -384,15 +438,19 @@ class LibrarianLoop:
             concepts_integrated,
             edges_integrated,
         )
-        return LibrarianActivity(
-            run_id=run_id,
-            iteration=iteration,
-            work_item_id=work_item.id,
-            status="success",
-            concepts_integrated=concepts_integrated,
-            edges_integrated=edges_integrated,
-            model_used=model_info.name,
-            duration_seconds=time.monotonic() - start_time,
+        return (
+            LibrarianActivity(
+                run_id=run_id,
+                iteration=iteration,
+                work_item_id=work_item.id,
+                status="success",
+                concepts_integrated=concepts_integrated,
+                edges_integrated=edges_integrated,
+                model_used=model_info.name,
+                duration_seconds=time.monotonic() - start_time,
+            ),
+            tokens_used,
+            detail,
         )
 
     # -------------------------------------------------------------------------
@@ -413,28 +471,25 @@ class LibrarianLoop:
         except OSError:
             return ""
 
-    def _build_prompt(self, work_item: WorkItem, code_content: str) -> str:
+    def _build_prompt(
+        self,
+        *,
+        work_item: WorkItem,
+        code_content: str,
+        structural_context: str,
+        provider: str,
+    ) -> str:
         """Build the LLM analysis prompt for a work item.
 
         Includes failure history when the work item has prior failure records
         so the LLM can address specific shortcomings on retry (AC-5).
         """
-        failure_context = ""
-        if work_item.failure_records:
-            lines = []
-            for i, fr in enumerate(work_item.failure_records):
-                line = f"- Attempt {i + 1}: {fr.failure_reason}"
-                if fr.reviewer_feedback:
-                    line += f" | Reviewer feedback: {fr.reviewer_feedback}"
-                lines.append(line)
-            failure_context = _FAILURE_CONTEXT_TEMPLATE.format(
-                failures="\n".join(lines)
-            )
-
-        return _ANALYSIS_PROMPT_TEMPLATE.format(
-            file_path=work_item.file_path or "(no file)",
-            code_content=code_content or "(no code available)",
-            failure_context=failure_context,
+        return build_librarian_prompt(
+            work_item=work_item,
+            code_content=code_content,
+            structural_context=structural_context,
+            provider=provider,
+            with_failure_context=bool(work_item.failure_records),
         )
 
     def _build_structural_context(self, concept) -> str:
@@ -452,37 +507,75 @@ class LibrarianLoop:
     def _parse_llm_output(content: str) -> dict:
         """Parse the LLM response content to a raw dict for Level 1 validation.
 
-        Strips markdown code fences if present. Returns an empty dict on JSON
-        parse failure so that Level 1's schema check fails gracefully.
+        Accepts plain JSON and JSON in markdown fences, normalizes provider
+        response shape, and falls back to text extraction when parsing fails.
         """
-        content = content.strip()
-        # Strip markdown fences (```json ... ``` or ``` ... ```)
-        if content.startswith("```"):
-            lines = content.split("\n")
-            if lines[-1].startswith("```"):
-                content = "\n".join(lines[1:-1])
-            else:
-                content = "\n".join(lines[1:])
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            return {}
+        return parse_librarian_response(content)
 
-    def _integrate_output(self, output: LibrarianOutput) -> tuple[int, int]:
+    def _maybe_truncate_prompt(
+        self,
+        *,
+        prompt: str,
+        code_content: str,
+        work_item: WorkItem,
+        provider: str,
+        iteration: int,
+    ) -> str:
+        """Truncate graph context in ``prompt`` when it exceeds the per-iteration limit.
+
+        Code content and structural code context are preserved. Only the graph
+        neighbour context (the ``## Structural context`` section) is reduced to
+        fit within ``max_tokens_per_iteration`` (AC-2).
+
+        When no per-iteration limit is configured, the prompt is returned unchanged.
+        """
+        limit = self._config.budget.max_tokens_per_iteration
+        if limit is None:
+            return prompt
+
+        token_count = self._adapter.get_token_count(prompt)
+        if token_count <= limit:
+            return prompt
+
+        # Rebuild with empty structural context to preserve code section (AC-2)
+        logger.warning(
+            "Iteration %d: prompt is %d tokens (limit %d) — truncating graph context.",
+            iteration,
+            token_count,
+            limit,
+        )
+        truncated = self._build_prompt(
+            work_item=work_item,
+            code_content=code_content,
+            structural_context="",  # remove graph context
+            provider=provider,
+        )
+        return truncated
+
+    def _integrate_output(self, output: LibrarianOutput) -> tuple[int, int, dict]:
         """Integrate concepts and edges from approved librarian output.
 
         Returns:
-            A ``(concepts_integrated, edges_integrated)`` tuple.
+            A ``(concepts_integrated, edges_integrated, detail)`` tuple where
+            ``detail`` breaks down counts for telemetry.
         """
         name_to_id: dict[str, uuid.UUID] = {}
         concepts_integrated = 0
+        concepts_created = 0
+        concepts_updated = 0
 
         for cp in output.concepts:
             result = self._integration_tree.integrate_concept(cp.name, cp.description)
             name_to_id[cp.name] = result.concept.id
             concepts_integrated += 1
+            if result.action == IntegrationAction.CREATED:
+                concepts_created += 1
+            else:
+                concepts_updated += 1
 
         edges_integrated = 0
+        edges_created = 0
+        edges_updated = 0
         if output.edges:
             # Build a full name→id map for concepts already in the graph
             all_concepts = {c.name: c.id for c in self._store.list_concepts()}
@@ -492,7 +585,7 @@ class LibrarianLoop:
                 source_id = name_to_id.get(ep.source_name)
                 target_id = name_to_id.get(ep.target_name)
                 if source_id and target_id:
-                    self._integration_tree.integrate_edge(
+                    edge_result = self._integration_tree.integrate_edge(
                         source_id,
                         target_id,
                         ep.edge_type,
@@ -500,5 +593,15 @@ class LibrarianLoop:
                         ep.confidence,
                     )
                     edges_integrated += 1
+                    if edge_result.action == IntegrationAction.EDGE_CREATED:
+                        edges_created += 1
+                    else:
+                        edges_updated += 1
 
-        return concepts_integrated, edges_integrated
+        detail = {
+            "concepts_created": concepts_created,
+            "concepts_updated": concepts_updated,
+            "edges_created": edges_created,
+            "edges_updated": edges_updated,
+        }
+        return concepts_integrated, edges_integrated, detail

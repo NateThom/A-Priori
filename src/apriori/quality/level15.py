@@ -14,7 +14,7 @@ Usage::
 
     from apriori.quality.level15 import check_level15
 
-    assessment = await check_level15(
+    assessment, tokens_used = await check_level15(
         librarian_output=level1_result.adjusted_output,
         code_snippet=original_source,
         structural_context=graph_neighbourhood,
@@ -165,14 +165,16 @@ async def check_level15(
     structural_context: str,
     adapter: LLMAdapter,
     config: Optional[QualityCoRegulationConfig] = None,
-) -> CoRegulationAssessment:
+) -> tuple[CoRegulationAssessment, int]:
     """Run the Level 1.5 co-regulation review.
 
     Makes a second LLM call using the adversarial-framing prompt from S-8.
-    Returns a :class:`CoRegulationAssessment` with scores and optional feedback.
+    Returns a :class:`CoRegulationAssessment` with scores and optional feedback,
+    along with the number of tokens consumed by the review call.
 
     When ``config.enabled`` is False, skips the LLM call and returns an
-    automatic pass (:attr:`CoRegulationAssessment.composite_pass` = True).
+    automatic pass (:attr:`CoRegulationAssessment.composite_pass` = True) with
+    zero tokens used.
 
     Args:
         librarian_output: The Level 1-approved LibrarianOutput to review.
@@ -186,13 +188,15 @@ async def check_level15(
             thresholds when None.
 
     Returns:
-        A :class:`CoRegulationAssessment` instance.  Check
+        A ``(assessment, tokens_used)`` tuple. ``assessment`` is a
+        :class:`CoRegulationAssessment` instance — check
         :attr:`CoRegulationAssessment.composite_pass` to determine whether the
-        librarian output is approved for graph integration.
+        librarian output is approved for graph integration. ``tokens_used`` is
+        the number of tokens consumed by the review LLM call (0 when disabled).
     """
     if config is not None and not config.enabled:
-        return _AUTO_PASS
+        return _AUTO_PASS, 0
 
     prompt = _build_prompt(librarian_output, code_snippet, structural_context)
     result = await adapter.analyze(prompt, context="")
-    return _parse_response(result.content)
+    return _parse_response(result.content), result.tokens_used

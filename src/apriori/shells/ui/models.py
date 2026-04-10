@@ -51,9 +51,11 @@ class ConceptDetail(BaseModel):
     description: str
     labels: list[str]
     confidence: float
+    code_references: list[dict[str, Any]]
     created_by: str
     verified_by: Optional[str]
     last_verified: Optional[str]
+    derived_from_code_version: Optional[str]
     impact_profile: Optional[Any]
     created_at: str
     updated_at: str
@@ -67,6 +69,12 @@ class CytoscapeNodeData(BaseModel):
     id: str
     label: str
     type: str
+    labels: list[str]
+    confidence: float
+    highlighted: bool
+    confidence_bucket: str
+    visual_opacity: float
+    visual_color: str
 
 
 class CytoscapeNode(BaseModel):
@@ -82,6 +90,12 @@ class CytoscapeEdgeData(BaseModel):
     source: str
     target: str
     weight: float
+    edge_type: str
+    evidence_type: str
+    confidence: float
+    confidence_bucket: str
+    visual_opacity: float
+    visual_line_style: str
 
 
 class CytoscapeEdge(BaseModel):
@@ -95,21 +109,53 @@ class GraphResponse(BaseModel):
 
     nodes: list[CytoscapeNode]
     edges: list[CytoscapeEdge]
+    layout: str
 
 
 class ActivityItem(BaseModel):
-    """A single work item representing one librarian iteration."""
+    """A compact summary of the processed work item."""
 
     id: uuid.UUID
     item_type: str
-    concept_id: uuid.UUID
     description: str
-    file_path: Optional[str]
+
+
+class ActivityConcept(BaseModel):
+    """A compact summary of the concept created or updated in an iteration."""
+
+    id: uuid.UUID
+    name: str
+
+
+class ActivityFailureRecord(BaseModel):
+    """Failure details used by expandable failed-iteration entries."""
+
+    attempted_at: str
+    model_used: str
+    prompt_template: str
+    failure_reason: str
+    quality_scores: Optional[dict[str, float]]
+    reviewer_feedback: Optional[str]
+
+
+class ActivityEntry(BaseModel):
+    """A single librarian iteration entry for the activity feed."""
+
+    id: uuid.UUID
+    run_id: uuid.UUID
+    iteration: int
     created_at: str
-    resolved_at: Optional[str]
-    failure_count: int
-    escalated: bool
-    resolved: bool
+    status: str
+    passed: bool
+    failure_reason: Optional[str]
+    work_item: Optional[ActivityItem]
+    concept: Optional[ActivityConcept]
+    co_regulation_scores: Optional[dict[str, float]]
+    failure_record: Optional[ActivityFailureRecord]
+    concepts_integrated: int
+    edges_integrated: int
+    model_used: str
+    duration_seconds: float
 
 
 class HealthMetrics(BaseModel):
@@ -135,3 +181,34 @@ class HealthResponse(BaseModel):
     targets: HealthTargets
     effective_weights: dict[str, float]
     work_queue_depth: int
+    escalated_count: int
+
+
+class EscalatedAssociatedConcept(BaseModel):
+    """Concept context shown alongside an escalated work item."""
+
+    id: uuid.UUID
+    name: Optional[str]
+    labels: list[str]
+
+
+class EscalatedFailureAttempt(BaseModel):
+    """One failed attempt from a WorkItem.failure_records entry."""
+
+    attempted_at: str
+    model_used: str
+    prompt_template: str
+    failure_reason: str
+    quality_scores: Optional[dict[str, float]]
+    reviewer_feedback: Optional[str]
+
+
+class EscalatedItemView(BaseModel):
+    """Escalated work item payload for the dedicated escalated-items view."""
+
+    id: uuid.UUID
+    item_type: str
+    description: str
+    failure_count: int
+    associated_concept: EscalatedAssociatedConcept
+    failure_history: list[EscalatedFailureAttempt]
