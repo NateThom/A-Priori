@@ -6,6 +6,8 @@ AC traceability:
 - AC-3: GET /api/graph?center={id}&radius=2 returns Cytoscape-format subgraph.
 - AC-4: GET /api/activity?limit=20 returns 20 most recent librarian iterations.
 - AC-5: GET /api/health returns metrics, targets, effective weights, queue depth.
+- AC-6: GET /api/escalated-items returns escalated items with associated concepts
+  and full failure history for the escalated-items view.
 """
 
 import uuid
@@ -343,6 +345,30 @@ def _make_work_item(concept_id: uuid.UUID, description: str = "Work item") -> Wo
         item_type="verify_concept",
         concept_id=concept_id,
         description=description,
+    )
+
+
+def _make_failure_record(
+    *,
+    attempted_at: datetime,
+    model_used: str,
+    failure_reason: str,
+    specificity: float,
+    corroboration: float,
+    completeness: float,
+    reviewer_feedback: str,
+) -> FailureRecord:
+    return FailureRecord(
+        attempted_at=attempted_at,
+        model_used=model_used,
+        prompt_template="default",
+        failure_reason=failure_reason,
+        quality_scores={
+            "specificity": specificity,
+            "structural_corroboration": corroboration,
+            "completeness": completeness,
+        },
+        reviewer_feedback=reviewer_feedback,
     )
 
 
@@ -924,3 +950,155 @@ class TestGetHealth:
             value = data["metrics"][key]
             assert isinstance(value, float)
             assert 0.0 <= value <= 1.0, f"{key}={value} not in [0,1]"
+
+
+# ---------------------------------------------------------------------------
+# AC-6: GET /api/escalated-items
+# ---------------------------------------------------------------------------
+
+
+class TestGetEscalatedItemsView:
+    def test_lists_all_escalated_items_with_description_and_associated_concept(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """Given 5 escalated work items, all 5 include description + concept context."""
+        for i in range(5):
+            concept = _make_concept(name=f"Concept {i}", labels={"needs-human-review"})
+            store.create_concept(concept)
+            item = store.create_work_item(
+                WorkItem(
+                    item_type="verify_concept",
+                    concept_id=concept.id,
+                    description=f"Escalated item {i}",
+                    failure_count=3,
+                )
+            )
+            store.escalate_work_item(item.id)
+
+        response = client.get("/api/escalated-items")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 5
+        for row in data:
+            assert row["description"].startswith("Escalated item ")
+            assert row["associated_concept"]["id"]
+            assert row["associated_concept"]["name"].startswith("Concept ")
+
+    def test_includes_full_failure_history_with_model_reason_scores_and_feedback(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """Given an escalated item, response includes full per-attempt failure history."""
+        concept = _make_concept(name="Payments")
+        store.create_concept(concept)
+        item = store.create_work_item(
+            WorkItem(
+                item_type="verify_concept",
+                concept_id=concept.id,
+                description="Escalated payments work item",
+            )
+        )
+
+        first = _make_failure_record(
+            attempted_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            model_used="claude-sonnet-4-20250514",
+            failure_reason="Level 1.5: specificity below threshold",
+            specificity=0.2,
+            corroboration=0.9,
+            completeness=0.6,
+            reviewer_feedback="Missing concrete payment constraints from code.",
+        )
+        second = _make_failure_record(
+            attempted_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            model_used="claude-sonnet-4-20250514",
+            failure_reason="Level 1.5: specificity below threshold",
+            specificity=0.25,
+            corroboration=0.85,
+            completeness=0.6,
+            reviewer_feedback="Still generic; include amount limits and currency logic.",
+        )
+        third = _make_failure_record(
+            attempted_at=datetime(2026, 1, 3, tzinfo=timezone.utc),
+            model_used="claude-sonnet-4-20250514",
+            failure_reason="Level 1.5: specificity below threshold",
+            specificity=0.28,
+            corroboration=0.82,
+            completeness=0.61,
+            reviewer_feedback="Name exact functions and validation branches.",
+        )
+
+        store.record_failure(item.id, first)
+        store.record_failure(item.id, second)
+        store.record_failure(item.id, third)
+        store.escalate_work_item(item.id)
+
+        response = client.get("/api/escalated-items")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+
+        history = data[0]["failure_history"]
+        assert len(history) == 3
+        assert history[0]["model_used"] == "claude-sonnet-4-20250514"
+        assert "specificity below threshold" in history[0]["failure_reason"]
+        assert history[0]["quality_scores"]["specificity"] == 0.2
+        assert history[0]["reviewer_feedback"] == "Missing concrete payment constraints from code."
+
+    def test_failure_history_preserves_attempt_variation_for_pattern_diagnosis(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """Failure history retains varied attempts to support failure-pattern analysis."""
+        concept = _make_concept(name="Auth")
+        store.create_concept(concept)
+        item = store.create_work_item(
+            WorkItem(
+                item_type="verify_concept",
+                concept_id=concept.id,
+                description="Escalated auth work item",
+            )
+        )
+        store.record_failure(
+            item.id,
+            _make_failure_record(
+                attempted_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+                model_used="claude-sonnet-4-20250514",
+                failure_reason="Level 1.5: specificity below threshold",
+                specificity=0.30,
+                corroboration=0.90,
+                completeness=0.72,
+                reviewer_feedback="Description too generic.",
+            ),
+        )
+        store.record_failure(
+            item.id,
+            _make_failure_record(
+                attempted_at=datetime(2026, 2, 2, tzinfo=timezone.utc),
+                model_used="qwen2.5:7b",
+                failure_reason="Level 1.5: structural corroboration below threshold",
+                specificity=0.75,
+                corroboration=0.12,
+                completeness=0.80,
+                reviewer_feedback="Relationship claims not grounded in code.",
+            ),
+        )
+        store.record_failure(
+            item.id,
+            _make_failure_record(
+                attempted_at=datetime(2026, 2, 3, tzinfo=timezone.utc),
+                model_used="claude-sonnet-4-20250514",
+                failure_reason="Level 1: generic description",
+                specificity=0.35,
+                corroboration=0.70,
+                completeness=0.50,
+                reviewer_feedback="Use repository-specific terminology.",
+            ),
+        )
+        store.escalate_work_item(item.id)
+
+        response = client.get("/api/escalated-items")
+        assert response.status_code == 200
+        data = response.json()
+        history = data[0]["failure_history"]
+        models = {attempt["model_used"] for attempt in history}
+        reasons = {attempt["failure_reason"] for attempt in history}
+        assert models == {"claude-sonnet-4-20250514", "qwen2.5:7b"}
+        assert len(reasons) == 3
