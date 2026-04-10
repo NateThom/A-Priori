@@ -622,6 +622,463 @@ def _cmd_blast_radius(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Shared helpers for new commands
+# ---------------------------------------------------------------------------
+
+
+def _build_store_from_args(args: argparse.Namespace):
+    """Build a KnowledgeStore from CLI args (SQLiteStore, arch:core-lib-thin-shells)."""
+    from apriori.storage.sqlite_store import SQLiteStore
+
+    db_path = _resolve_db_path(args)
+    if not db_path.exists():
+        print(
+            f"Error: database not found at {db_path}\n"
+            "Run `apriori init` to initialise the knowledge graph.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return SQLiteStore(db_path)
+
+
+def _build_adapter_from_config(config):
+    """Build an LLM adapter from config (arch:adapter-pattern)."""
+    if config.llm.provider == "ollama":
+        from apriori.adapters.ollama import OllamaAdapter
+        return OllamaAdapter(config.llm)
+    from apriori.adapters.anthropic import AnthropicAdapter
+    return AnthropicAdapter(config.llm)
+
+
+def _resolve_yaml_backup_path(args: argparse.Namespace) -> Path:
+    """Return the YAML backup directory path from args or config."""
+    from apriori.config import load_config
+
+    apriori_config = Path.cwd() / ".apriori" / "apriori.config.yaml"
+    if apriori_config.exists():
+        config = load_config(apriori_config)
+    else:
+        config = load_config()
+    yaml_path = Path(config.storage.yaml_backup_path)
+    if yaml_path.is_dir() and (yaml_path / "concepts").is_dir():
+        return yaml_path / "concepts"
+    return yaml_path
+
+
+# ---------------------------------------------------------------------------
+# librarian run command
+# ---------------------------------------------------------------------------
+
+
+def _cmd_librarian_run(args: argparse.Namespace) -> None:
+    """Execute the librarian loop for up to --iterations iterations
+    within an optional token --budget (arch:core-lib-thin-shells)."""
+    import asyncio
+
+    from apriori.config import load_config
+    from apriori.librarian.loop import LibrarianLoop
+
+    apriori_config = Path.cwd() / ".apriori" / "apriori.config.yaml"
+    config = load_config(apriori_config if apriori_config.exists() else None)
+
+    budget = getattr(args, "budget", None)
+    if budget is not None:
+        config = config.model_copy(
+            update={"budget": config.budget.model_copy(update={"max_tokens_per_run": budget})}
+        )
+
+    iterations = getattr(args, "iterations", None) or config.librarian.max_iterations_per_run
+
+    store = _build_store_from_args(args)
+    adapter = _build_adapter_from_config(config)
+
+    loop = LibrarianLoop(store=store, adapter=adapter, config=config)
+
+    print(f"Running librarian loop: up to {iterations} iteration(s)…")
+    if budget:
+        print(f"  Token budget: {budget:,}")
+
+    activities, telemetry = asyncio.run(loop.run(iterations))
+
+    print()
+    print("Librarian run complete.")
+    print(f"  Iterations:       {telemetry.total_iterations}")
+    print(f"  Tokens used:      {telemetry.total_tokens:,}")
+    print(f"  Yield:            {telemetry.iteration_yield:.1%}")
+    print(f"  Items resolved:   {telemetry.work_items_resolved}")
+    print(f"  Items failed:     {telemetry.work_items_failed}")
+    print(f"  Concepts created: {telemetry.concepts_created}")
+    print(f"  Edges created:    {telemetry.edges_created}")
+    print()
+
+
+# ---------------------------------------------------------------------------
+# librarian status command
+# ---------------------------------------------------------------------------
+
+
+def _cmd_librarian_status(args: argparse.Namespace) -> None:
+    """Display detailed iteration yield, token spend history, and failure
+    logs for the last 5 librarian runs."""
+    import json as _json
+    from collections import defaultdict
+
+    use_json = getattr(args, "json", False)
+    store = _build_store_from_args(args)
+
+    activities = store.list_librarian_activities()
+
+    if not activities:
+        if use_json:
+            print(_json.dumps([]))
+        else:
+            print("No librarian runs recorded yet.")
+            print("Run `apriori librarian run` to start the librarian.")
+        return
+
+    # Group by run_id, preserving insertion order (activities sorted by iteration)
+    runs: dict = defaultdict(list)
+    for act in activities:
+        runs[str(act.run_id)].append(act)
+
+    # Sort runs by the created_at of their first activity (most recent last)
+    sorted_run_ids = sorted(
+        runs.keys(),
+        key=lambda rid: runs[rid][0].created_at,
+    )
+
+    if use_json:
+        output = []
+        for rid in sorted_run_ids:
+            run_acts = runs[rid]
+            total = len(run_acts)
+            resolved = sum(1 for a in run_acts if a.status == "success")
+            failures = [
+                {"iteration": a.iteration, "status": a.status, "reason": a.failure_reason}
+                for a in run_acts
+                if a.failure_reason
+            ]
+            output.append({
+                "run_id": rid,
+                "total_iterations": total,
+                "resolved": resolved,
+                "yield": resolved / total if total else 0.0,
+                "failures": failures,
+            })
+        print(_json.dumps(output))
+        return
+
+    print("Librarian Run History")
+    print("=" * 60)
+
+    # Show last 5 runs (most recent at the bottom)
+    last_5_ids = sorted_run_ids[-5:]
+    for rid in last_5_ids:
+        run_acts = runs[rid]
+        total = len(run_acts)
+        resolved = sum(1 for a in run_acts if a.status == "success")
+        run_yield = resolved / total if total else 0.0
+        started_at = run_acts[0].created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+        print(f"\n  Run {rid[:8]}…  ({started_at})")
+        print(f"    Iterations: {total}  |  Yield: {run_yield:.1%}  |  Resolved: {resolved}")
+
+        failures = [a for a in run_acts if a.failure_reason]
+        if failures:
+            print("    Failures:")
+            for a in failures:
+                print(f"      [iter {a.iteration}] {a.status}: {a.failure_reason}")
+
+    print()
+
+
+# ---------------------------------------------------------------------------
+# concept command
+# ---------------------------------------------------------------------------
+
+
+def _cmd_concept(args: argparse.Namespace) -> None:
+    """Display full details for a concept by name (arch:core-lib-thin-shells)."""
+    import json as _json
+
+    name: str = args.name
+    use_json = getattr(args, "json", False)
+    store = _build_store_from_args(args)
+
+    results = store.search_keyword(name, limit=20)
+
+    # Prefer exact name match; fall back to first result
+    exact = [c for c in results if c.name.lower() == name.lower()]
+    candidates = exact if exact else results
+
+    if use_json:
+        print(_json.dumps(
+            [c.model_dump(mode="json") for c in candidates],
+            default=str,
+        ))
+        return
+
+    if not candidates:
+        print(f"Concept '{name}' not found.")
+        print("Try `apriori search <query>` for fuzzy matches.")
+        return
+
+    for concept in candidates:
+        print()
+        print(f"  Name:        {concept.name}")
+        print(f"  ID:          {concept.id}")
+        print(f"  Confidence:  {concept.confidence:.2f}")
+        print(f"  Labels:      {', '.join(sorted(concept.labels)) or 'none'}")
+        print(f"  Description: {concept.description or '(none)'}")
+        if concept.code_references:
+            print("  Code References:")
+            for ref in concept.code_references:
+                loc = f":{ref.line_range[0]}-{ref.line_range[1]}" if ref.line_range else ""
+                print(f"    • {ref.file_path}{loc}  [{ref.symbol}]")
+        if concept.created_at:
+            print(f"  Created:     {concept.created_at}")
+        if concept.updated_at:
+            print(f"  Updated:     {concept.updated_at}")
+        print()
+
+
+# ---------------------------------------------------------------------------
+# validate command
+# ---------------------------------------------------------------------------
+
+
+def _cmd_validate(args: argparse.Namespace) -> None:
+    """Run integrity checks on the knowledge graph
+    (arch:core-lib-thin-shells)."""
+    import json as _json
+
+    use_json = getattr(args, "json", False)
+    store = _build_store_from_args(args)
+
+    errors: list[str] = []
+
+    # ------------------------------------------------------------------
+    # Check 1: All edge references point to existing concepts
+    # ------------------------------------------------------------------
+    concepts = store.list_concepts()
+    concept_ids = {c.id for c in concepts}
+    edges = store.list_edges()
+
+    for edge in edges:
+        if edge.source_id not in concept_ids:
+            errors.append(
+                f"Dangling edge {edge.id}: source concept {edge.source_id} not found"
+            )
+        if edge.target_id not in concept_ids:
+            errors.append(
+                f"Dangling edge {edge.id}: target concept {edge.target_id} not found"
+            )
+
+    # ------------------------------------------------------------------
+    # Check 2: All code references have valid file paths
+    # ------------------------------------------------------------------
+    for concept in concepts:
+        for ref in concept.code_references:
+            if ref.is_unresolved:
+                continue  # already marked unresolved — skip
+            p = Path(ref.file_path)
+            if not p.is_absolute():
+                continue  # relative paths cannot be validated without repo root
+            if not p.exists():
+                errors.append(
+                    f"Concept '{concept.name}': code reference file not found: {ref.file_path}"
+                )
+
+    # ------------------------------------------------------------------
+    # Check 3: No orphaned YAML files (YAML concept not in SQLite)
+    # ------------------------------------------------------------------
+    yaml_path = _resolve_yaml_backup_path(args)
+    if yaml_path.is_dir():
+        import yaml as _yaml
+
+        sqlite_ids = concept_ids
+        for yaml_file in sorted(yaml_path.glob("*.yaml")):
+            try:
+                data = _yaml.safe_load(yaml_file.read_text())
+            except Exception:
+                errors.append(f"Orphaned/corrupt YAML file: {yaml_file.name}")
+                continue
+            if not data or "id" not in data:
+                errors.append(f"YAML file missing 'id' field: {yaml_file.name}")
+                continue
+            try:
+                import uuid as _uuid
+                yaml_id = _uuid.UUID(str(data["id"]))
+            except ValueError:
+                errors.append(f"YAML file has invalid UUID 'id': {yaml_file.name}")
+                continue
+            if yaml_id not in sqlite_ids:
+                errors.append(
+                    f"Orphaned YAML concept '{data.get('name', yaml_file.stem)}' "
+                    f"({yaml_file.name}) not found in SQLite"
+                )
+
+    if use_json:
+        print(_json.dumps({"errors": errors}))
+        return
+
+    if not errors:
+        print("Validation OK — 0 errors found.")
+    else:
+        print(f"Validation found {len(errors)} error(s):")
+        for err in errors:
+            print(f"  [ERROR] {err}")
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# export command
+# ---------------------------------------------------------------------------
+
+
+def _cmd_export(args: argparse.Namespace) -> None:
+    """Export the full knowledge graph to a file or stdout
+    (arch:core-lib-thin-shells)."""
+    import json as _json
+
+    fmt = getattr(args, "format", "json")
+    output_path = getattr(args, "output", None)
+
+    store = _build_store_from_args(args)
+
+    concepts = store.list_concepts()
+    edges = store.list_edges()
+
+    if fmt == "json":
+        payload = {
+            "concepts": [c.model_dump(mode="json") for c in concepts],
+            "edges": [e.model_dump(mode="json") for e in edges],
+        }
+        text = _json.dumps(payload, default=str, indent=2)
+    else:
+        print(f"Error: unsupported format '{fmt}'", file=sys.stderr)
+        sys.exit(1)
+
+    if output_path:
+        Path(output_path).write_text(text)
+        print(f"Exported {len(concepts)} concept(s) and {len(edges)} edge(s) to {output_path}")
+    else:
+        print(text)
+
+
+# ---------------------------------------------------------------------------
+# doctor — subsystem health check helpers
+# ---------------------------------------------------------------------------
+
+
+def _check_tree_sitter() -> tuple[bool, str]:
+    """Check that tree-sitter is importable."""
+    try:
+        import tree_sitter  # noqa: F401
+        return True, ""
+    except ImportError:
+        return False, "Install tree-sitter: pip install tree-sitter"
+
+
+def _check_llm_connectivity(config) -> tuple[bool, str]:
+    """Check that the LLM API key env variable is set."""
+    import os
+
+    key = os.environ.get(config.llm.api_key_env)
+    if not key:
+        return (
+            False,
+            f"Set ${config.llm.api_key_env} environment variable "
+            f"(provider: {config.llm.provider})",
+        )
+    return True, ""
+
+
+def _check_sqlite_health(args: argparse.Namespace) -> tuple[bool, str]:
+    """Check that the SQLite database is accessible."""
+    import sqlite3 as _sqlite3
+
+    try:
+        db_path = _resolve_db_path(args)
+    except SystemExit:
+        return False, "Could not determine database path — run `apriori init` first"
+    if not db_path.exists():
+        return False, f"Database not found at {db_path} — run `apriori init` first"
+    try:
+        with _sqlite3.connect(str(db_path)) as conn:
+            conn.execute("SELECT 1")
+        return True, ""
+    except Exception as exc:
+        return False, f"SQLite error: {exc}"
+
+
+def _check_git_integration() -> tuple[bool, str]:
+    """Check that git is available in PATH."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["git", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return True, ""
+        return False, "git returned non-zero exit code — ensure git is installed"
+    except FileNotFoundError:
+        return False, "git not found in PATH — install git"
+    except Exception as exc:
+        return False, f"git check failed: {exc}"
+
+
+def _check_embedding_model() -> tuple[bool, str]:
+    """Check that sentence-transformers is importable."""
+    try:
+        import sentence_transformers  # noqa: F401
+        return True, ""
+    except ImportError:
+        return (
+            False,
+            "Install sentence-transformers: pip install sentence-transformers",
+        )
+
+
+def _cmd_doctor(args: argparse.Namespace) -> None:
+    """Check all A-Priori subsystems and report pass/fail with guidance
+    (arch:core-lib-thin-shells)."""
+    from apriori.config import load_config
+
+    apriori_config = Path.cwd() / ".apriori" / "apriori.config.yaml"
+    config = load_config(apriori_config if apriori_config.exists() else None)
+
+    checks: list[tuple[str, bool, str]] = [
+        ("tree-sitter",        *_check_tree_sitter()),
+        ("LLM connectivity",   *_check_llm_connectivity(config)),
+        ("SQLite health",      *_check_sqlite_health(args)),
+        ("git integration",    *_check_git_integration()),
+        ("embedding model",    *_check_embedding_model()),
+    ]
+
+    any_fail = False
+    print("A-Priori Doctor")
+    print("=" * 50)
+    for label, ok, guidance in checks:
+        status = "PASS" if ok else "FAIL"
+        line = f"  [{status}]  {label}"
+        print(line)
+        if not ok:
+            any_fail = True
+            print(f"         → {guidance}")
+    print()
+
+    if any_fail:
+        print("Some checks failed. See guidance above.")
+        sys.exit(1)
+    else:
+        print("All checks passed.")
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
@@ -805,6 +1262,132 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Output results as JSON",
     )
 
+    # apriori librarian
+    librarian_parser = subparsers.add_parser(
+        "librarian",
+        help="Manage the librarian loop (run, status)",
+    )
+    librarian_subparsers = librarian_parser.add_subparsers(
+        dest="librarian_subcommand", metavar="SUBCOMMAND"
+    )
+
+    # apriori librarian run
+    lib_run_parser = librarian_subparsers.add_parser(
+        "run",
+        help="Execute the librarian loop",
+    )
+    lib_run_parser.add_argument(
+        "--iterations",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Maximum iterations to run (default: from config)",
+    )
+    lib_run_parser.add_argument(
+        "--budget",
+        type=int,
+        default=None,
+        metavar="TOKENS",
+        help="Token budget for this run (overrides config)",
+    )
+    lib_run_parser.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Path to SQLite database (default: from config or .apriori/graph.db)",
+    )
+
+    # apriori librarian status
+    lib_status_parser = librarian_subparsers.add_parser(
+        "status",
+        help="Show detailed librarian run history",
+    )
+    lib_status_parser.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Path to SQLite database (default: from config or .apriori/graph.db)",
+    )
+    lib_status_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output status as JSON",
+    )
+
+    # apriori concept
+    concept_parser = subparsers.add_parser(
+        "concept",
+        help="Display full details for a concept by name",
+    )
+    concept_parser.add_argument(
+        "name",
+        help="Concept name to look up",
+    )
+    concept_parser.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Path to SQLite database (default: from config or .apriori/graph.db)",
+    )
+    concept_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output concept details as JSON",
+    )
+
+    # apriori validate
+    validate_parser = subparsers.add_parser(
+        "validate",
+        help="Run integrity checks on the knowledge graph",
+    )
+    validate_parser.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Path to SQLite database (default: from config or .apriori/graph.db)",
+    )
+    validate_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output validation results as JSON",
+    )
+
+    # apriori export
+    export_parser = subparsers.add_parser(
+        "export",
+        help="Export the full knowledge graph",
+    )
+    export_parser.add_argument(
+        "--format",
+        choices=["json"],
+        default="json",
+        help="Export format (default: json)",
+    )
+    export_parser.add_argument(
+        "--output",
+        default=None,
+        metavar="PATH",
+        help="Output file path (default: stdout)",
+    )
+    export_parser.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Path to SQLite database (default: from config or .apriori/graph.db)",
+    )
+
+    # apriori doctor
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        help="Check all A-Priori subsystems and report health",
+    )
+    doctor_parser.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Path to SQLite database (default: from config or .apriori/graph.db)",
+    )
+
     return parser
 
 
@@ -827,6 +1410,24 @@ def main() -> None:
         _cmd_ui(args)
     elif args.command == "blast-radius":
         _cmd_blast_radius(args)
+    elif args.command == "librarian":
+        sub = getattr(args, "librarian_subcommand", None)
+        if sub == "run":
+            _cmd_librarian_run(args)
+        elif sub == "status":
+            _cmd_librarian_status(args)
+        else:
+            # Print librarian sub-help
+            parser._subparsers._group_actions[0].choices["librarian"].print_help()
+            sys.exit(0)
+    elif args.command == "concept":
+        _cmd_concept(args)
+    elif args.command == "validate":
+        _cmd_validate(args)
+    elif args.command == "export":
+        _cmd_export(args)
+    elif args.command == "doctor":
+        _cmd_doctor(args)
     else:
         parser.print_help()
         sys.exit(0)
