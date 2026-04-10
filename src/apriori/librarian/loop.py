@@ -104,6 +104,8 @@ class LibrarianLoop:
         self._modulator = AdaptiveModulator(
             base_weights=dict(config.base_priority_weights),
             modulation_strength=config.librarian.modulation_strength,
+            bootstrap_coverage_threshold=config.librarian.bootstrap_coverage_threshold,
+            bootstrap_developer_proximity_strength=config.librarian.bootstrap_developer_proximity_strength,
         )
         self._metrics_engine = MetricsEngine(store)
         self._integration_tree = IntegrationDecisionTree(store)
@@ -163,6 +165,7 @@ class LibrarianLoop:
             return [], telemetry
 
         claimed: set[uuid.UUID] = set()
+        files_analyzed: set[str] = set()
         lock = asyncio.Lock()
         activity_records: list[LibrarianActivity] = []
         claimed_iterations = 0
@@ -217,6 +220,9 @@ class LibrarianLoop:
                         telemetry.concepts_updated += detail.get("concepts_updated", 0)
                         telemetry.edges_created += detail.get("edges_created", 0)
                         telemetry.edges_updated += detail.get("edges_updated", 0)
+                        # Track unique source files analyzed (ERD §6.1)
+                        if work_item.file_path:
+                            files_analyzed.add(str(work_item.file_path))
                     elif activity.status in ("level1_failure", "level15_failure", "error"):
                         telemetry.work_items_failed += 1
 
@@ -233,6 +239,9 @@ class LibrarianLoop:
             and self._store.get_work_item(act.work_item_id).escalated
         )
 
+        # Finalise progressive enrichment tracking (ERD §6.1)
+        telemetry.files_analyzed = len(files_analyzed)
+
         logger.info(
             "Run complete: %d iterations, %d tokens, %d resolved, %d failed, "
             "%.2f iteration yield.",
@@ -242,6 +251,13 @@ class LibrarianLoop:
             telemetry.work_items_failed,
             telemetry.iteration_yield,
         )
+
+        if self._total_source_files > 0:
+            progress_report = telemetry.format_progress_report(
+                total_source_files=self._total_source_files,
+                cost_per_1k_tokens=self._config.budget.cost_per_1k_tokens,
+            )
+            logger.info(progress_report)
 
         return activity_records, telemetry
 
