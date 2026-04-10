@@ -26,4 +26,5 @@ class ImpactProfile(BaseModel):
     structural_impact: list[ImpactEntry] = Field(default_factory=list)
     semantic_impact: list[ImpactEntry] = Field(default_factory=list)
     historical_impact: list[ImpactEntry] = Field(default_factory=list)
+    structural_only: bool = False
     last_computed: datetime
