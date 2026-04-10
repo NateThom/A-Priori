@@ -438,10 +438,11 @@ def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
             targets=HealthTargets(
                 coverage_target=0.80,
                 freshness_target=0.90,
-                blast_radius_target=0.80,
+                blast_radius_target=0.70,
             ),
             effective_weights=effective_weights,
             work_queue_depth=stats["pending"],
+            escalated_count=stats["escalated"],
         )
 
     @app.get(
