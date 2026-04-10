@@ -9,7 +9,6 @@ Routes:
     GET /api/graph                — subgraph in Cytoscape format
     GET /api/activity             — recent librarian iterations (work items)
     GET /api/health               — quality metrics, targets, weights, queue depth
-    GET /api/escalated-items      — escalated view payload with failure history
 
 Static frontend assets are served from a ``static/`` directory adjacent to this
 file when that directory exists. In development the React app is served by Vite
@@ -38,9 +37,6 @@ from apriori.shells.ui.models import (
     CytoscapeNode,
     CytoscapeNodeData,
     EdgeSummary,
-    EscalatedAssociatedConcept,
-    EscalatedFailureAttempt,
-    EscalatedItemView,
     GraphResponse,
     HealthMetrics,
     HealthResponse,
@@ -126,32 +122,6 @@ def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
             failure_count=wi.failure_count,
             escalated=wi.escalated,
             resolved=wi.resolved,
-        )
-
-    def _to_escalated_item_view(wi) -> EscalatedItemView:
-        concept = store.get_concept(wi.concept_id)
-        associated_concept = EscalatedAssociatedConcept(
-            id=wi.concept_id,
-            name=concept.name if concept is not None else None,
-            labels=sorted(concept.labels) if concept is not None else [],
-        )
-        return EscalatedItemView(
-            id=wi.id,
-            item_type=wi.item_type,
-            description=wi.description,
-            failure_count=wi.failure_count,
-            associated_concept=associated_concept,
-            failure_history=[
-                EscalatedFailureAttempt(
-                    attempted_at=record.attempted_at.isoformat(),
-                    model_used=record.model_used,
-                    prompt_template=record.prompt_template,
-                    failure_reason=record.failure_reason,
-                    quality_scores=record.quality_scores,
-                    reviewer_feedback=record.reviewer_feedback,
-                )
-                for record in wi.failure_records
-            ],
         )
 
     # -------------------------------------------------------------------------
@@ -293,16 +263,6 @@ def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
             effective_weights=effective_weights,
             work_queue_depth=stats["pending"],
         )
-
-    @app.get(
-        "/api/escalated-items",
-        response_model=list[EscalatedItemView],
-        summary="Escalated items with concept context and full failure history",
-    )
-    async def get_escalated_items_view() -> list[EscalatedItemView]:
-        """Return escalated work items for the dedicated escalated-items view."""
-        items = await asyncio.to_thread(store.get_escalated_items)
-        return [_to_escalated_item_view(item) for item in items]
 
     # -------------------------------------------------------------------------
     # Static file serving (production: built React app)
