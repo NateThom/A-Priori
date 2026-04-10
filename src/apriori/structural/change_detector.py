@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from apriori.models.concept import Concept
 from apriori.models.work_item import WorkItem
 from apriori.storage.protocol import KnowledgeStore
+from apriori.structural.fqn import module_fqn, symbol_fqn
 from apriori.structural.graph_builder import GraphBuilder
 from apriori.structural.languages.python_parser import PythonParser
 from apriori.structural.languages.typescript import TypeScriptParser
@@ -53,23 +54,18 @@ class ChangeDetectionResult(BaseModel):
 _STATE_KEY = "last_analyzed_commit"
 
 
-def _fqn(file_path: Path, *parts: str) -> str:
-    """Compute a fully-qualified symbol name matching GraphBuilder's convention."""
-    return str(file_path) + "::" + "::".join(parts)
-
-
 def _symbols_from_result(result: ParseResult) -> set[str]:
     """Return the set of FQNs that the GraphBuilder would create for *result*."""
-    fqns: set[str] = set()
+    fqns: set[str] = {module_fqn(result.file_path)}
     fp = result.file_path
     for func in result.functions:
-        fqns.add(_fqn(fp, func.name))
+        fqns.add(symbol_fqn(fp, func.name))
     for cls in result.classes:
-        fqns.add(_fqn(fp, cls.name))
+        fqns.add(symbol_fqn(fp, cls.name))
         for method in cls.methods:
-            fqns.add(_fqn(fp, cls.name, method.name))
+            fqns.add(symbol_fqn(fp, cls.name, method.name))
     for iface in result.interfaces:
-        fqns.add(_fqn(fp, iface.name))
+        fqns.add(symbol_fqn(fp, iface.name))
     return fqns
 
 

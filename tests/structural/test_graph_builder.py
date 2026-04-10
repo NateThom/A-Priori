@@ -23,6 +23,7 @@ from apriori.structural.models import (
     ClassEntity,
     FunctionEntity,
     FunctionParam,
+    ImportRelationship,
     InterfaceEntity,
     ParseResult,
     Relationship,
@@ -74,6 +75,10 @@ def _cls(name: str, fp: Path, start: int = 1, end: int = 1, bases: list | None =
     return ClassEntity(name=name, start_line=start, end_line=end, file_path=fp, bases=bases or [])
 
 
+def _concept_by_name(store: SQLiteStore, name: str) -> Concept:
+    return next(c for c in store.list_concepts() if c.name == name)
+
+
 # ---------------------------------------------------------------------------
 # AC1: 5 functions + 3 classes → 8 concept nodes
 # ---------------------------------------------------------------------------
@@ -94,7 +99,7 @@ class TestAC1ConceptNodes:
 
         builder.build([_make_result(fp, functions=functions, classes=classes, source=source)])
 
-        assert len(store.list_concepts()) == 8
+        assert len(store.list_concepts()) == 9
 
     def test_all_concepts_have_agent_created_by(
         self, store: SQLiteStore, builder: GraphBuilder, tmp_path: Path
@@ -135,7 +140,7 @@ class TestAC1ConceptNodes:
 
         builder.build([_make_result(fp, interfaces=interfaces, source=source, language="typescript")])
 
-        assert len(store.list_concepts()) == 2
+        assert len(store.list_concepts()) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +224,136 @@ class TestAC2CallsEdge:
 
 
 # ---------------------------------------------------------------------------
+# Gap AC: module concepts + import edges
+# ---------------------------------------------------------------------------
+
+
+class TestGapModuleConceptsAndImportEdges:
+    """Gap AC: module-level concepts and imports edges are materialized."""
+
+    def test_module_concept_created_for_each_file(
+        self, store: SQLiteStore, builder: GraphBuilder, tmp_path: Path
+    ) -> None:
+        fp = tmp_path / "example.py"
+        source = b"def my_func(): pass\n"
+
+        builder.build([_make_result(fp, functions=[_func("my_func", fp, 1, 1)], source=source)])
+
+        concept_names = {c.name for c in store.list_concepts()}
+        assert str(fp) in concept_names
+        assert str(fp) + "::my_func" in concept_names
+
+    def test_python_import_edges_from_module_concept(
+        self, store: SQLiteStore, builder: GraphBuilder, tmp_path: Path
+    ) -> None:
+        fp = tmp_path / "example.py"
+        source = b"import os\nfrom pathlib import Path\ndef my_func(): pass\n"
+        rels = [
+            Relationship(kind="imports", source="", target="os", file_path=fp, line=1),
+            Relationship(kind="imports", source="pathlib", target="Path", file_path=fp, line=2),
+        ]
+        store.create_concept(Concept(name="os", description="os module", created_by="agent"))
+        store.create_concept(Concept(name="Path", description="Path class", created_by="agent"))
+
+        builder.build([_make_result(fp, functions=[_func("my_func", fp, 3, 3)], relationships=rels, source=source)])
+
+        module_concept = next(c for c in store.list_concepts() if c.name == str(fp))
+        imports_edges = [
+            e for e in store.list_edges(edge_type="imports")
+            if e.source_id == module_concept.id
+        ]
+        assert len(imports_edges) == 2
+        assert all(e.evidence_type == "structural" for e in imports_edges)
+        assert all(e.confidence == 1.0 for e in imports_edges)
+
+    def test_typescript_import_edges_from_module_concept(
+        self, store: SQLiteStore, builder: GraphBuilder, tmp_path: Path
+    ) -> None:
+        fp = tmp_path / "app.ts"
+        source = b"import { Router } from 'express'\nexport function handler() {}\n"
+        store.create_concept(Concept(name="Router", description="Router type", created_by="agent"))
+        imports = [ImportRelationship(source_module="express", names=["Router"], file_path=fp, start_line=1)]
+
+        builder.build([
+            _make_result(
+                fp,
+                functions=[_func("handler", fp, 2, 2)],
+                source=source,
+                language="typescript",
+                )
+        ])
+        # Rebuild with imports populated (mirrors TypeScript parser output).
+        result = _make_result(
+            fp,
+            functions=[_func("handler", fp, 2, 2)],
+            source=source,
+            language="typescript",
+        )
+        result.imports = imports
+        builder.build([result])
+
+        module_concept = next(c for c in store.list_concepts() if c.name == str(fp))
+        imports_edges = [
+            e for e in store.list_edges(edge_type="imports")
+            if e.source_id == module_concept.id
+        ]
+        assert len(imports_edges) == 1
+
+    def test_module_and_import_edges_are_idempotent(
+        self, store: SQLiteStore, builder: GraphBuilder, tmp_path: Path
+    ) -> None:
+        fp = tmp_path / "example.py"
+        source = b"import os\ndef my_func(): pass\n"
+        store.create_concept(Concept(name="os", description="os module", created_by="agent"))
+        rels = [Relationship(kind="imports", source="", target="os", file_path=fp, line=1)]
+        result = _make_result(fp, functions=[_func("my_func", fp, 2, 2)], relationships=rels, source=source)
+
+        builder.build([result])
+        builder.build([result])
+
+        module_concepts = [c for c in store.list_concepts() if c.name == str(fp)]
+        imports_edges = store.list_edges(edge_type="imports")
+        assert len(module_concepts) == 1
+        assert len(imports_edges) == 1
+
+    def test_stale_import_edges_removed_when_file_changes(
+        self, store: SQLiteStore, builder: GraphBuilder, tmp_path: Path
+    ) -> None:
+        fp = tmp_path / "example.py"
+        store.create_concept(Concept(name="os", description="os module", created_by="agent"))
+        store.create_concept(Concept(name="Path", description="Path class", created_by="agent"))
+
+        first = _make_result(
+            fp,
+            functions=[_func("my_func", fp, 3, 3)],
+            relationships=[
+                Relationship(kind="imports", source="", target="os", file_path=fp, line=1),
+                Relationship(kind="imports", source="pathlib", target="Path", file_path=fp, line=2),
+            ],
+            source=b"import os\nfrom pathlib import Path\ndef my_func(): pass\n",
+        )
+        second = _make_result(
+            fp,
+            functions=[_func("my_func", fp, 2, 2)],
+            relationships=[Relationship(kind="imports", source="", target="os", file_path=fp, line=1)],
+            source=b"import os\ndef my_func(): pass\n",
+        )
+
+        builder.build([first])
+        builder.build([second])
+
+        module_concept = next(c for c in store.list_concepts() if c.name == str(fp))
+        imports_edges = [
+            e for e in store.list_edges(edge_type="imports")
+            if e.source_id == module_concept.id
+        ]
+        assert len(imports_edges) == 1
+        target_concept = store.get_concept(imports_edges[0].target_id)
+        assert target_concept is not None
+        assert target_concept.name == "os"
+
+
+# ---------------------------------------------------------------------------
 # AC3: idempotency
 # ---------------------------------------------------------------------------
 
@@ -239,7 +374,7 @@ class TestAC3Idempotency:
         builder.build([result])
         builder.build([result])
 
-        assert len(store.list_concepts()) == 2
+        assert len(store.list_concepts()) == 3
 
     def test_running_twice_no_duplicate_edges(
         self, store: SQLiteStore, builder: GraphBuilder, tmp_path: Path
@@ -278,14 +413,14 @@ class TestAC4UpdateNotDuplicate:
 
         builder.build([_make_result(fp, functions=[func], source=source1)])
         first_concepts = store.list_concepts()
-        assert len(first_concepts) == 1
-        first_id = first_concepts[0].id
+        assert len(first_concepts) == 2
+        first_id = _concept_by_name(store, str(fp) + "::func_a").id
 
         builder.build([_make_result(fp, functions=[func], source=source2)])
         second_concepts = store.list_concepts()
 
-        assert len(second_concepts) == 1
-        assert second_concepts[0].id == first_id  # same UUID, updated in place
+        assert len(second_concepts) == 2
+        assert _concept_by_name(store, str(fp) + "::func_a").id == first_id  # same UUID, updated in place
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +441,7 @@ class TestAC5ContentHash:
 
         builder.build([_make_result(fp, functions=[func], source=source)])
 
-        concept = store.list_concepts()[0]
+        concept = _concept_by_name(store, str(fp) + "::my_func")
         assert len(concept.code_references) >= 1
 
     def test_content_hash_is_valid_sha256(
@@ -319,7 +454,7 @@ class TestAC5ContentHash:
 
         builder.build([_make_result(fp, functions=[func], source=source)])
 
-        concept = store.list_concepts()[0]
+        concept = _concept_by_name(store, str(fp) + "::my_func")
         ref = concept.code_references[0]
         assert len(ref.content_hash) == 64
         assert all(c in "0123456789abcdef" for c in ref.content_hash)
@@ -337,7 +472,7 @@ class TestAC5ContentHash:
         builder.build([_make_result(fp, functions=[func], source=source)])
 
         expected_hash = hashlib.sha256(b"def my_func(): pass").hexdigest()
-        concept = store.list_concepts()[0]
+        concept = _concept_by_name(store, str(fp) + "::my_func")
         assert concept.code_references[0].content_hash == expected_hash
 
 
@@ -359,7 +494,7 @@ class TestAC6SemanticAnchor:
 
         builder.build([_make_result(fp, functions=[func], source=source)])
 
-        ref = store.list_concepts()[0].code_references[0]
+        ref = _concept_by_name(store, str(fp) + "::my_func").code_references[0]
         assert ref.semantic_anchor
 
     def test_semantic_anchor_contains_entity_name(
@@ -372,7 +507,7 @@ class TestAC6SemanticAnchor:
 
         builder.build([_make_result(fp, functions=[func], source=source)])
 
-        ref = store.list_concepts()[0].code_references[0]
+        ref = _concept_by_name(store, str(fp) + "::my_func").code_references[0]
         assert "my_func" in ref.semantic_anchor or "function" in ref.semantic_anchor.lower()
 
     def test_semantic_anchor_contains_line_range(
@@ -385,7 +520,7 @@ class TestAC6SemanticAnchor:
 
         builder.build([_make_result(fp, functions=[func], source=source)])
 
-        ref = store.list_concepts()[0].code_references[0]
+        ref = _concept_by_name(store, str(fp) + "::my_func").code_references[0]
         assert "1" in ref.semantic_anchor  # start line appears somewhere
 
 
@@ -417,7 +552,7 @@ class TestAC7Metadata:
 
         builder.build([_make_result(fp, functions=[func], source=source)])
 
-        concept = store.list_concepts()[0]
+        concept = _concept_by_name(store, str(fp) + "::greet")
         assert concept.metadata is not None
         assert "params" in concept.metadata
         params = concept.metadata["params"]
@@ -443,7 +578,7 @@ class TestAC7Metadata:
 
         builder.build([_make_result(fp, functions=[func], source=source)])
 
-        concept = store.list_concepts()[0]
+        concept = _concept_by_name(store, str(fp) + "::greet")
         assert concept.metadata["return_type"] == "str"
 
     def test_function_metadata_contains_type_annotations(
@@ -463,7 +598,7 @@ class TestAC7Metadata:
 
         builder.build([_make_result(fp, functions=[func], source=source)])
 
-        concept = store.list_concepts()[0]
+        concept = _concept_by_name(store, str(fp) + "::f")
         param_entry = concept.metadata["params"][0]
         assert param_entry["type_annotation"] == "int"
 
@@ -486,7 +621,7 @@ class TestAC8GitHeadStamping:
 
         builder.build([_make_result(fp, functions=[func], source=source)])
 
-        concept = store.list_concepts()[0]
+        concept = _concept_by_name(store, str(fp) + "::func")
         assert concept.derived_from_code_version == FAKE_GIT_HEAD
 
     def test_edge_derived_from_code_version_set(
@@ -513,7 +648,7 @@ class TestAC8GitHeadStamping:
 
         no_git_builder.build([_make_result(fp, functions=[func], source=source)])
 
-        concept = store.list_concepts()[0]
+        concept = _concept_by_name(store, str(fp) + "::func")
         assert concept.derived_from_code_version is None
 
 

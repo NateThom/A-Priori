@@ -17,8 +17,13 @@ from pathlib import Path
 import pytest
 
 from apriori.storage.sqlite_store import SQLiteStore
-from apriori.structural.change_detector import ChangeDetector, ChangeDetectionResult
+from apriori.structural.change_detector import (
+    ChangeDetectionResult,
+    ChangeDetector,
+    _symbols_from_result,
+)
 from apriori.structural.graph_builder import GraphBuilder
+from apriori.structural.models import FunctionEntity, ParseResult
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +165,24 @@ class TestAC1OnlyChangedFilesReparsed:
         # No changes — second run should see head_a as previous
         result_b = detector.run()
         assert result_b.previous_commit == head_a
+
+
+class TestSymbolExtraction:
+    """Symbol extraction includes module-level FQN used by GraphBuilder."""
+
+    def test_symbols_include_module_fqn(self, tmp_path: Path) -> None:
+        fp = tmp_path / "mod.py"
+        result = ParseResult(
+            file_path=fp,
+            language="python",
+            source=b"def fn():\n    pass\n",
+            functions=[FunctionEntity(name="fn", start_line=1, end_line=2, file_path=fp)],
+        )
+
+        symbols = _symbols_from_result(result)
+
+        assert str(fp) in symbols
+        assert str(fp) + "::fn" in symbols
 
 
 # ---------------------------------------------------------------------------
