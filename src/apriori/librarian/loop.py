@@ -30,7 +30,6 @@ Usage::
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 import uuid
@@ -39,6 +38,10 @@ from typing import Callable, Optional
 from apriori.adapters.base import LLMAdapter
 from apriori.config import Config
 from apriori.knowledge.integrator import IntegrationDecisionTree
+from apriori.librarian.prompt_templates import (
+    build_librarian_prompt,
+    parse_librarian_response,
+)
 from apriori.models.librarian_activity import LibrarianActivity
 from apriori.models.librarian_output import LibrarianOutput
 from apriori.models.work_item import WorkItem
@@ -54,47 +57,6 @@ from apriori.quality.priority import BasePriorityEngine
 from apriori.storage.protocol import KnowledgeStore
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Prompt templates
-# ---------------------------------------------------------------------------
-
-_ANALYSIS_PROMPT_TEMPLATE = """\
-Analyze the following code and identify all key concepts and relationships.
-
-File: {file_path}
-
-```python
-{code_content}
-```
-
-Instructions:
-- Identify all key concepts (classes, functions, modules) with specific, detailed descriptions.
-- Descriptions must be at least 50 characters and describe THIS specific code, not generic boilerplate.
-- Include specific parameter behaviors, error conditions, and return value semantics.
-- Identify relationships between concepts using only these edge types: depends-on, implements, \
-relates-to, shares-assumption-about, extends, supersedes, owned-by.
-{failure_context}
-Respond with valid JSON only (no preamble, no markdown fences):
-{{
-  "concepts": [
-    {{
-      "name": "ExactConceptName",
-      "description": "Specific description with parameter behaviors and return value semantics",
-      "confidence": 0.9,
-      "code_references": []
-    }}
-  ],
-  "edges": []
-}}"""
-
-_FAILURE_CONTEXT_TEMPLATE = """\
-
-## Previous Analysis Failures (Retry Context)
-Address these failures in your analysis — be specific and avoid generic descriptions:
-{failures}
-"""
-
 
 # ---------------------------------------------------------------------------
 # LibrarianLoop
@@ -289,9 +251,16 @@ class LibrarianLoop:
 
         # Step 1: Load code from disk
         code_content = self._load_code(work_item)
+        concept = self._store.get_concept(work_item.concept_id)
+        structural_context = self._build_structural_context(concept)
 
         # Step 2: Build prompt (include failure history on retry — AC-5)
-        prompt = self._build_prompt(work_item, code_content)
+        prompt = self._build_prompt(
+            work_item=work_item,
+            code_content=code_content,
+            structural_context=structural_context,
+            provider=model_info.provider,
+        )
 
         # Step 3: LLM analysis call
         try:
@@ -335,9 +304,6 @@ class LibrarianLoop:
             )
 
         # Step 6: Level 1.5 co-regulation review (AC-4)
-        concept = self._store.get_concept(work_item.concept_id)
-        structural_context = self._build_structural_context(concept)
-
         assessment = await check_level15(
             librarian_output=level1_result.adjusted_output,
             code_snippet=code_content,
@@ -413,28 +379,25 @@ class LibrarianLoop:
         except OSError:
             return ""
 
-    def _build_prompt(self, work_item: WorkItem, code_content: str) -> str:
+    def _build_prompt(
+        self,
+        *,
+        work_item: WorkItem,
+        code_content: str,
+        structural_context: str,
+        provider: str,
+    ) -> str:
         """Build the LLM analysis prompt for a work item.
 
         Includes failure history when the work item has prior failure records
         so the LLM can address specific shortcomings on retry (AC-5).
         """
-        failure_context = ""
-        if work_item.failure_records:
-            lines = []
-            for i, fr in enumerate(work_item.failure_records):
-                line = f"- Attempt {i + 1}: {fr.failure_reason}"
-                if fr.reviewer_feedback:
-                    line += f" | Reviewer feedback: {fr.reviewer_feedback}"
-                lines.append(line)
-            failure_context = _FAILURE_CONTEXT_TEMPLATE.format(
-                failures="\n".join(lines)
-            )
-
-        return _ANALYSIS_PROMPT_TEMPLATE.format(
-            file_path=work_item.file_path or "(no file)",
-            code_content=code_content or "(no code available)",
-            failure_context=failure_context,
+        return build_librarian_prompt(
+            work_item=work_item,
+            code_content=code_content,
+            structural_context=structural_context,
+            provider=provider,
+            with_failure_context=bool(work_item.failure_records),
         )
 
     def _build_structural_context(self, concept) -> str:
@@ -452,21 +415,10 @@ class LibrarianLoop:
     def _parse_llm_output(content: str) -> dict:
         """Parse the LLM response content to a raw dict for Level 1 validation.
 
-        Strips markdown code fences if present. Returns an empty dict on JSON
-        parse failure so that Level 1's schema check fails gracefully.
+        Accepts plain JSON and JSON in markdown fences, normalizes provider
+        response shape, and falls back to text extraction when parsing fails.
         """
-        content = content.strip()
-        # Strip markdown fences (```json ... ``` or ``` ... ```)
-        if content.startswith("```"):
-            lines = content.split("\n")
-            if lines[-1].startswith("```"):
-                content = "\n".join(lines[1:-1])
-            else:
-                content = "\n".join(lines[1:])
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            return {}
+        return parse_librarian_response(content)
 
     def _integrate_output(self, output: LibrarianOutput) -> tuple[int, int]:
         """Integrate concepts and edges from approved librarian output.
