@@ -123,3 +123,33 @@ class HealthResponse(BaseModel):
     targets: HealthTargets
     effective_weights: dict[str, float]
     work_queue_depth: int
+
+
+class EscalatedAssociatedConcept(BaseModel):
+    """Concept context shown alongside an escalated work item."""
+
+    id: uuid.UUID
+    name: Optional[str]
+    labels: list[str]
+
+
+class EscalatedFailureAttempt(BaseModel):
+    """One failed attempt from a WorkItem.failure_records entry."""
+
+    attempted_at: str
+    model_used: str
+    prompt_template: str
+    failure_reason: str
+    quality_scores: Optional[dict[str, float]]
+    reviewer_feedback: Optional[str]
+
+
+class EscalatedItemView(BaseModel):
+    """Escalated work item payload for the dedicated escalated-items view."""
+
+    id: uuid.UUID
+    item_type: str
+    description: str
+    failure_count: int
+    associated_concept: EscalatedAssociatedConcept
+    failure_history: list[EscalatedFailureAttempt]
