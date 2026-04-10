@@ -98,6 +98,22 @@ class QualityConfig(BaseModel):
     auto_reject_threshold: float = Field(default=0.3, ge=0.0, le=1.0)
 
 
+class BudgetConfig(BaseModel):
+    """Token budget configuration (ERD §4.8).
+
+    Enforces per-run and per-iteration token limits to prevent unexpected costs.
+    When unset (None), the corresponding limit is not enforced.
+    """
+
+    max_tokens_per_run: Optional[int] = Field(default=None, ge=1)
+    max_tokens_per_iteration: Optional[int] = Field(default=None, ge=1)
+    token_estimation_window: int = Field(
+        default=5,
+        ge=1,
+        description="Number of recent iterations used to compute the rolling average cost estimate.",
+    )
+
+
 class WorkQueueConfig(BaseModel):
     """Work queue and backlog configuration."""
 
@@ -137,6 +153,7 @@ class Config(BaseModel):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     librarian: LibrarianConfig = Field(default_factory=LibrarianConfig)
     quality: QualityConfig = Field(default_factory=QualityConfig)
+    budget: BudgetConfig = Field(default_factory=BudgetConfig)
     work_queue: WorkQueueConfig = Field(default_factory=WorkQueueConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
