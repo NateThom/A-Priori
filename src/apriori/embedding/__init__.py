@@ -5,6 +5,10 @@ intfloat/e5-base-v2 via sentence-transformers (768-dimensional vectors).
 """
 
 from apriori.embedding.protocol import EmbeddingServiceProtocol
-from apriori.embedding.service import EmbeddingService
+
+try:
+    from apriori.embedding.service import EmbeddingService
+except ModuleNotFoundError:  # pragma: no cover - optional runtime dependency path
+    EmbeddingService = None  # type: ignore[assignment]
 
 __all__ = ["EmbeddingService", "EmbeddingServiceProtocol"]
