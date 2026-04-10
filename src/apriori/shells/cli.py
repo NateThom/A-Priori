@@ -3,8 +3,10 @@
 Usage::
 
     apriori init [--repo PATH] [--no-embed]
-    apriori search QUERY [--limit N] [--db PATH]
-    apriori status [--db PATH]
+    apriori search QUERY [--limit N] [--db PATH] [--json]
+    apriori status [--db PATH] [--json]
+    apriori rebuild-index [--db PATH] [--yaml-path PATH] [--no-embed]
+    apriori config [set KEY VALUE] [--json]
     apriori ui [--host HOST] [--port PORT] [--db PATH] [--reload]
 
 The ``init`` command initialises a repository for A-Priori:
@@ -249,6 +251,8 @@ def _resolve_db_path(args: argparse.Namespace) -> Path:
 
 def _cmd_search(args: argparse.Namespace) -> None:
     """Search the knowledge graph using FTS keyword matching."""
+    import json as _json
+
     from apriori.storage.sqlite_store import SQLiteStore
 
     db_path = _resolve_db_path(args)
@@ -264,8 +268,22 @@ def _cmd_search(args: argparse.Namespace) -> None:
     store = SQLiteStore(db_path)
     query = args.query
     limit = getattr(args, "limit", 10)
+    use_json = getattr(args, "json", False)
 
     results = store.search_keyword(query, limit=limit)
+
+    if use_json:
+        output = [
+            {
+                "name": c.name,
+                "description": c.description,
+                "confidence": c.confidence,
+                "labels": sorted(c.labels),
+            }
+            for c in results
+        ]
+        print(_json.dumps(output))
+        return
 
     if not results:
         print(f"No results for '{query}'.")
@@ -273,12 +291,11 @@ def _cmd_search(args: argparse.Namespace) -> None:
 
     print(f"Results for '{query}' ({len(results)} match(es)):\n")
     for i, concept in enumerate(results, start=1):
-        print(f"  {i}. {concept.name}")
-        if concept.description:
-            # Truncate long descriptions
-            desc = concept.description
-            if len(desc) > 100:
-                desc = desc[:97] + "…"
+        desc = concept.description or ""
+        if len(desc) > 100:
+            desc = desc[:97] + "…"
+        print(f"  {i}. {concept.name}  conf: {concept.confidence:.2f}")
+        if desc:
             print(f"     {desc}")
     print()
 
@@ -290,9 +307,12 @@ def _cmd_search(args: argparse.Namespace) -> None:
 
 def _cmd_status(args: argparse.Namespace) -> None:
     """Report knowledge graph health metrics."""
+    import json as _json
+
     from apriori.storage.sqlite_store import SQLiteStore
 
     db_path = _resolve_db_path(args)
+    use_json = getattr(args, "json", False)
 
     if not db_path.exists():
         print(
@@ -304,22 +324,192 @@ def _cmd_status(args: argparse.Namespace) -> None:
 
     store = SQLiteStore(db_path)
 
-    concepts = store.list_concepts()
-    edges = store.list_edges()
+    metrics = store.get_metrics()
+    concept_count = metrics["concept_count"]
+    edge_count = metrics["edge_count"]
 
-    concept_count = len(concepts)
-    edge_count = len(edges)
+    covered_files = store.count_covered_files()
+    pending_items = store.get_pending_work_items()
+    work_queue_depth = len(pending_items)
 
-    # Count concepts by label presence
-    needs_review = sum(1 for c in concepts if "needs-review" in (c.labels or []))
+    last_parse: str | None = store.get_last_parse_timestamp()
+
+    if use_json:
+        print(_json.dumps({
+            "concept_count": concept_count,
+            "edge_count": edge_count,
+            "covered_files": covered_files,
+            "work_queue_depth": work_queue_depth,
+            "last_parse": last_parse,
+            "database": str(db_path.resolve()),
+        }))
+        return
 
     print("A-Priori Graph Status")
     print("=" * 40)
-    print(f"  Concepts:      {concept_count}")
-    print(f"  Edges:         {edge_count}")
-    print(f"  Needs review:  {needs_review}")
-    print(f"  Database:      {db_path.resolve()}")
+    print(f"  Concepts:          {concept_count}")
+    print(f"  Edges:             {edge_count}")
+    print(f"  Covered files:     {covered_files}")
+    print(f"  Work queue depth:  {work_queue_depth}")
+    print(f"  Last parse:        {last_parse or 'n/a'}")
+    print(f"  Database:          {db_path.resolve()}")
     print()
+
+
+# ---------------------------------------------------------------------------
+# rebuild-index command
+# ---------------------------------------------------------------------------
+
+
+def _cmd_rebuild_index(args: argparse.Namespace) -> None:
+    """Reconstruct the SQLite database from YAML flat files (arch:core-lib-thin-shells)."""
+    from apriori.config import load_config
+    from apriori.embedding.service import EmbeddingService
+    from apriori.storage.rebuild import rebuild_index_from_yaml
+    from apriori.storage.yaml_store import YamlStore
+
+    apriori_config_path = Path.cwd() / ".apriori" / "apriori.config.yaml"
+    config = load_config(apriori_config_path if apriori_config_path.exists() else None)
+
+    db_path = Path(args.db) if getattr(args, "db", None) else Path(config.storage.sqlite_path)
+    yaml_base = Path(args.yaml_path) if getattr(args, "yaml_path", None) else Path(config.storage.yaml_backup_path)
+
+    yaml_store = YamlStore(yaml_base)
+
+    no_embed = getattr(args, "no_embed", False)
+
+    print(f"Rebuilding index from YAML files at {yaml_base}…")
+    print(f"  Target database: {db_path.resolve()}")
+
+    if no_embed:
+        class _NullEmbeddingService:
+            def generate_embedding(self, text: str, **kw: object) -> list[float]:
+                return [0.0] * 768
+
+            def generate_embeddings_batch(self, texts: list[str], **kw: object) -> list[list[float]]:
+                return [[0.0] * 768 for _ in texts]
+
+        embedding_svc: object = _NullEmbeddingService()
+    else:
+        print("  Loading embedding model…")
+        embedding_svc = EmbeddingService()
+
+    def _progress(current: int, total: int, message: str) -> None:
+        if total > 0:
+            print(f"  [{current}/{total}] {message}")
+        else:
+            print(f"  {message}")
+
+    rebuild_index_from_yaml(
+        yaml_store,
+        db_path=db_path,
+        embedding_service=embedding_svc,
+        progress_callback=_progress,
+    )
+
+    print()
+    print("Rebuild complete.")
+
+
+# ---------------------------------------------------------------------------
+# config command
+# ---------------------------------------------------------------------------
+
+
+def _resolve_config_path() -> Path:
+    """Return the config file path, preferring .apriori/ in the current directory."""
+    candidate = Path.cwd() / ".apriori" / "apriori.config.yaml"
+    if candidate.exists():
+        return candidate
+    return candidate  # Return even if not existing so callers can create it
+
+
+def _cmd_config(args: argparse.Namespace) -> None:
+    """Show or modify A-Priori configuration (arch:core-lib-thin-shells)."""
+    import json as _json
+
+    from apriori.config import load_config
+
+    config_subcommand = getattr(args, "config_subcommand", None)
+    use_json = getattr(args, "json", False)
+
+    if config_subcommand == "set":
+        _config_set(args)
+        return
+
+    # Default: print effective configuration
+    config_path = _resolve_config_path()
+    config = load_config(config_path if config_path.exists() else None)
+
+    if use_json:
+        print(_json.dumps(config.model_dump(mode="json"), indent=2, default=str))
+        return
+
+    print(f"A-Priori Configuration  (source: {config_path})")
+    print("=" * 50)
+    data = config.model_dump(mode="json")
+    _print_config_section(data, indent=0)
+    print()
+
+
+def _print_config_section(data: dict, indent: int) -> None:
+    """Recursively print config dict in aligned text format."""
+    prefix = "  " * indent
+    for key, value in sorted(data.items()):
+        if isinstance(value, dict):
+            print(f"{prefix}{key}:")
+            _print_config_section(value, indent + 1)
+        elif isinstance(value, (list, set)):
+            display = ", ".join(str(v) for v in sorted(str(x) for x in value))
+            print(f"{prefix}{key}: [{display}]")
+        else:
+            print(f"{prefix}{key}: {value}")
+
+
+def _config_set(args: argparse.Namespace) -> None:
+    """Update a single key in the config file using dotted notation."""
+    import yaml as _yaml
+
+    key: str = args.key
+    raw_value: str = args.value
+
+    config_path = _resolve_config_path()
+
+    # Load existing raw YAML (preserve structure; don't parse through Config)
+    existing: dict = {}
+    if config_path.exists():
+        loaded = _yaml.safe_load(config_path.read_text())
+        if loaded:
+            existing = loaded
+
+    # Parse the dotted key into nested path
+    parts = key.split(".")
+    # Navigate to the nested position, creating dicts as needed
+    node = existing
+    for part in parts[:-1]:
+        if part not in node or not isinstance(node[part], dict):
+            node[part] = {}
+        node = node[part]
+
+    leaf_key = parts[-1]
+    # Coerce value type: try int, then float, then bool, then string
+    coerced: object = raw_value
+    if raw_value.lower() in ("true", "false"):
+        coerced = raw_value.lower() == "true"
+    else:
+        try:
+            coerced = int(raw_value)
+        except ValueError:
+            try:
+                coerced = float(raw_value)
+            except ValueError:
+                coerced = raw_value  # Keep as string
+
+    node[leaf_key] = coerced
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(_yaml.dump(existing, allow_unicode=True, sort_keys=True))
+    print(f"Updated {key} = {coerced!r}  (saved to {config_path})")
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +608,11 @@ def main() -> None:
         metavar="PATH",
         help="Path to SQLite database (default: from config or .apriori/graph.db)",
     )
+    search_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output results as JSON",
+    )
 
     # apriori status
     status_parser = subparsers.add_parser(
@@ -430,6 +625,56 @@ def main() -> None:
         metavar="PATH",
         help="Path to SQLite database (default: from config or .apriori/graph.db)",
     )
+    status_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output status as JSON",
+    )
+
+    # apriori rebuild-index
+    rebuild_parser = subparsers.add_parser(
+        "rebuild-index",
+        help="Reconstruct the SQLite database from YAML flat files",
+    )
+    rebuild_parser.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Path to SQLite database to rebuild (default: from config or .apriori/graph.db)",
+    )
+    rebuild_parser.add_argument(
+        "--yaml-path",
+        default=None,
+        metavar="PATH",
+        dest="yaml_path",
+        help="Path to YAML backup directory (default: from config or .apriori/concepts)",
+    )
+    rebuild_parser.add_argument(
+        "--no-embed",
+        action="store_true",
+        dest="no_embed",
+        help="Skip embedding regeneration (uses zero vectors)",
+    )
+
+    # apriori config
+    config_parser = subparsers.add_parser(
+        "config",
+        help="View or modify A-Priori configuration",
+    )
+    config_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output configuration as JSON",
+    )
+    config_subparsers = config_parser.add_subparsers(
+        dest="config_subcommand", metavar="SUBCOMMAND"
+    )
+    config_set_parser = config_subparsers.add_parser(
+        "set",
+        help="Set a configuration value (dotted key notation, e.g. librarian.max_iterations_per_run)",
+    )
+    config_set_parser.add_argument("key", help="Dotted key path (e.g. librarian.max_iterations_per_run)")
+    config_set_parser.add_argument("value", help="New value")
 
     # apriori ui
     ui_parser = subparsers.add_parser(
@@ -467,6 +712,10 @@ def main() -> None:
         _cmd_search(args)
     elif args.command == "status":
         _cmd_status(args)
+    elif args.command == "rebuild-index":
+        _cmd_rebuild_index(args)
+    elif args.command == "config":
+        _cmd_config(args)
     elif args.command == "ui":
         _cmd_ui(args)
     else:
