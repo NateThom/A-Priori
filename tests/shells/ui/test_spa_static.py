@@ -59,3 +59,24 @@ def test_static_assets_are_served_from_root() -> None:
     assert "text/css" in css.headers["content-type"]
     assert js.status_code == 200
     assert "javascript" in js.headers["content-type"]
+
+
+def test_graph_query_and_style_bindings_match_api_contract() -> None:
+    """AC-1/AC-2: Graph view uses supported layout and visual_* style keys from API."""
+    source = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert 'useState("force-directed")' in source
+    assert '["force-directed", "breadthfirst"]' in source
+    assert '"background-color": "data(visual_color)"' in source
+    assert 'opacity: "data(visual_opacity)"' in source
+    assert '"line-style": "data(visual_line_style)"' in source
+
+
+def test_health_dashboard_uses_current_api_payload_keys() -> None:
+    """AC-5: Health view reads targets.*_target and effective_weights keys."""
+    source = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "health.targets.coverage_target" in source
+    assert "health.targets.freshness_target" in source
+    assert "health.targets.blast_radius_target" in source
+    assert "health.effective_weights" in source

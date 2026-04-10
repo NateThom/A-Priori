@@ -70,7 +70,7 @@
     const [edgeType, setEdgeType] = useState("")
     const [minConfidence, setMinConfidence] = useState(0)
     const [highlightLabel, setHighlightLabel] = useState("")
-    const [layout, setLayout] = useState("cose")
+    const [layout, setLayout] = useState("force-directed")
     const [graphData, setGraphData] = useState(null)
     const [selectedData, setSelectedData] = useState(null)
     const [status, setStatus] = useState("idle")
@@ -158,8 +158,8 @@
               "text-valign": "center",
               width: 16,
               height: 16,
-              "background-color": "data(color)",
-              opacity: "data(opacity)",
+              "background-color": "data(visual_color)",
+              opacity: "data(visual_opacity)",
               "border-width": "mapData(highlighted, 0, 1, 0, 3)",
               "border-color": "#0c4a6e",
             },
@@ -172,8 +172,8 @@
               "target-arrow-color": "#64748b",
               "target-arrow-shape": "triangle",
               "curve-style": "bezier",
-              opacity: "data(opacity)",
-              "line-style": "data(line_style)",
+              opacity: "data(visual_opacity)",
+              "line-style": "data(visual_line_style)",
             },
           },
           {
@@ -185,7 +185,10 @@
             },
           },
         ],
-        layout: { name: layout, animate: false },
+        layout: {
+          name: layout === "force-directed" ? "cose" : "breadthfirst",
+          animate: false,
+        },
       })
 
       cy.on("tap", "node, edge", (event) => {
@@ -285,7 +288,7 @@
           h(
             "select",
             { value: layout, onChange: (event) => setLayout(event.target.value) },
-            ["cose", "breadthfirst", "circle", "concentric", "grid"].map((name) =>
+            ["force-directed", "breadthfirst"].map((name) =>
               h("option", { key: name, value: name }, name)
             )
           )
@@ -645,17 +648,17 @@
               renderMetric(
                 "Coverage",
                 health.metrics.coverage,
-                health.targets.coverage
+                health.targets.coverage_target
               ),
               renderMetric(
                 "Freshness",
                 health.metrics.freshness,
-                health.targets.freshness
+                health.targets.freshness_target
               ),
               renderMetric(
                 "Blast Radius",
                 health.metrics.blast_radius_completeness,
-                health.targets.blast_radius_completeness
+                health.targets.blast_radius_target
               )
             ),
             h(
@@ -665,7 +668,7 @@
               h(
                 "pre",
                 { className: "code-block" },
-                JSON.stringify(health.effective_priority_weights, null, 2)
+                JSON.stringify(health.effective_weights, null, 2)
               )
             ),
             h(
