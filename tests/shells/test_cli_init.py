@@ -31,10 +31,22 @@ def _make_namespace(**kwargs) -> argparse.Namespace:
 
 
 def _make_fake_embedding_service():
-    """Return a mock EmbeddingService that never downloads a model."""
+    """Return a mock EmbeddingService that never downloads a model.
+
+    ``embed_all`` writes fake zero-vectors via the KnowledgeStore protocol so
+    that tests can assert on the concept_embeddings table without loading the
+    real sentence-transformers model.
+    """
     svc = MagicMock()
-    svc.generate_embedding.return_value = [0.0] * 768
-    svc.generate_embeddings_batch.return_value = [[0.0] * 768]
+    svc.generate_embedding.side_effect = lambda text, **kw: [0.0] * 768
+
+    def _fake_embed_all(store, **kwargs):
+        concepts = store.list_concepts()
+        for c in concepts:
+            store.store_embedding(c.id, [0.0] * 768)
+        return len(concepts)
+
+    svc.embed_all.side_effect = _fake_embed_all
     return svc
 
 
@@ -236,6 +248,36 @@ def test_init_sqlite_concepts_populated(tmp_path: Path, monkeypatch):
     conn.close()
     # module + 2 functions = 3 concepts minimum
     assert count >= 3, f"Expected ≥3 concepts, got {count}"
+
+
+def test_init_sqlite_embeddings_populated(tmp_path: Path, monkeypatch):
+    """AC 7: Given init completes, when the SQLite database is inspected,
+    then concept_embeddings rows equal the concept count — fully populated
+    and query-ready (arch:no-raw-sql: all writes go via store.store_embedding).
+
+    Uses SQLiteStore (not a raw sqlite3 connection) so that the sqlite_vec
+    extension is loaded and the vec0 virtual table is accessible.
+    """
+    from apriori.shells import cli
+    from apriori.storage.sqlite_store import SQLiteStore
+
+    _write_py_file(tmp_path / "worker.py", "def run(): pass\ndef stop(): pass\n")
+
+    with patch("apriori.embedding.service.EmbeddingService", return_value=_make_fake_embedding_service()):
+        args = _make_namespace(repo=str(tmp_path))
+        monkeypatch.chdir(tmp_path)
+        cli._cmd_init(args)
+
+    db_path = tmp_path / ".apriori" / "graph.db"
+    store = SQLiteStore(db_path)
+    concept_count = len(store.list_concepts())
+    conn = store._get_connection()
+    emb_count = conn.execute("SELECT COUNT(*) FROM concept_embeddings").fetchone()[0]
+
+    assert concept_count > 0, "Expected concepts to be created"
+    assert emb_count == concept_count, (
+        f"concept_embeddings ({emb_count}) should equal concept count ({concept_count})"
+    )
 
 
 # ---------------------------------------------------------------------------

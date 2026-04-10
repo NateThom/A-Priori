@@ -273,6 +273,28 @@ class SQLiteStore:
         )
         conn.commit()
 
+    def store_embedding(self, concept_id: uuid.UUID, vector: list[float]) -> None:
+        """Persist a pre-computed embedding vector for a Concept (arch:no-raw-sql).
+
+        Replaces any existing embedding for the concept via DELETE + INSERT
+        (vec0 does not support INSERT OR REPLACE / ON CONFLICT clauses).
+
+        Args:
+            concept_id: The UUID of the Concept whose embedding to store.
+            vector: A list of floats representing the embedding.
+        """
+        serialized = sqlite_vec.serialize_float32(vector)
+        conn = self._get_connection()
+        conn.execute(
+            "DELETE FROM concept_embeddings WHERE concept_id = ?",
+            (str(concept_id),),
+        )
+        conn.execute(
+            "INSERT INTO concept_embeddings(concept_id, embedding) VALUES (?, ?)",
+            (str(concept_id), serialized),
+        )
+        conn.commit()
+
     # -----------------------------------------------------------------------
     # Serialisation helpers
     # -----------------------------------------------------------------------

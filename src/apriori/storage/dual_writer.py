@@ -313,6 +313,10 @@ class DualWriter:
         """Rebuild the vector similarity index in SQLite."""
         self._sqlite.rebuild_index()
 
+    def store_embedding(self, concept_id: uuid.UUID, vector: list[float]) -> None:
+        """Persist a pre-computed embedding vector — SQLite-only, never dual-written."""
+        self._sqlite.store_embedding(concept_id, vector)
+
     # -------------------------------------------------------------------------
     # Librarian Activity — SQLite-only
     # -------------------------------------------------------------------------

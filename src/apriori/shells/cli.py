@@ -169,7 +169,11 @@ def _cmd_init(args: argparse.Namespace) -> None:
     # ------------------------------------------------------------------
     no_embed = getattr(args, "no_embed", False)
     if not no_embed and (build_result.concepts_created + build_result.concepts_updated) > 0:
-        _embed_all_concepts(sqlite_store)
+        from apriori.embedding.service import EmbeddingService
+
+        print("  Loading embedding model (first run downloads ~440MB, cached after)…")
+        svc = EmbeddingService()
+        svc.embed_all(store)
 
     # ------------------------------------------------------------------
     # Step 9 — Print final summary
@@ -210,54 +214,6 @@ def _get_git_head(repo_path: Path) -> str | None:
     except Exception:
         pass
     return None
-
-
-def _embed_all_concepts(sqlite_store: "SQLiteStore") -> None:  # noqa: F821
-    """Generate embeddings for all concepts that lack one.
-
-    Uses EmbeddingService (intfloat/e5-base-v2).  On first run this downloads
-    the ~440 MB model with progress output from sentence-transformers.
-    """
-    import sqlite_vec
-
-    from apriori.embedding.service import EmbeddingService
-
-    print("  Loading embedding model (first run downloads ~440MB, cached after)…")
-    svc = EmbeddingService()
-
-    conn = sqlite_store._get_connection()
-    concepts = conn.execute("SELECT id, description FROM concepts").fetchall()
-
-    if not concepts:
-        return
-
-    print(f"  Embedding {len(concepts)} concept(s)…")
-    batch_size = 32
-    for batch_start in range(0, len(concepts), batch_size):
-        batch = concepts[batch_start : batch_start + batch_size]
-        texts = [row[1] for row in batch]
-
-        try:
-            vectors = svc.generate_embeddings_batch(texts, text_type="passage")
-        except (AttributeError, NotImplementedError):
-            vectors = [svc.generate_embedding(t, text_type="passage") for t in texts]
-
-        for (concept_id, _), vector in zip(batch, vectors):
-            serialized = sqlite_vec.serialize_float32(vector)
-            conn.execute(
-                "DELETE FROM concept_embeddings WHERE concept_id = ?",
-                (concept_id,),
-            )
-            conn.execute(
-                "INSERT INTO concept_embeddings(concept_id, embedding) VALUES (?, ?)",
-                (concept_id, serialized),
-            )
-
-        conn.commit()
-        batch_end = min(batch_start + batch_size, len(concepts))
-        print(f"    Embedded {batch_end}/{len(concepts)}", end="\r")
-
-    print(f"  Embeddings complete: {len(concepts)} concept(s)")
 
 
 # ---------------------------------------------------------------------------
