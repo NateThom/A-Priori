@@ -677,6 +677,9 @@ def _cmd_librarian_run(args: argparse.Namespace) -> None:
 
     from apriori.config import load_config
     from apriori.librarian.loop import LibrarianLoop
+    from apriori.storage.dual_writer import DualWriter
+    from apriori.storage.sqlite_store import SQLiteStore
+    from apriori.storage.yaml_store import YamlStore
 
     apriori_config = Path.cwd() / ".apriori" / "apriori.config.yaml"
     config = load_config(apriori_config if apriori_config.exists() else None)
@@ -689,7 +692,25 @@ def _cmd_librarian_run(args: argparse.Namespace) -> None:
 
     iterations = getattr(args, "iterations", None) or config.librarian.max_iterations_per_run
 
-    store = _build_store_from_args(args)
+    # Build store with dual-write support for write operations (arch:sqlite-vec-storage).
+    # Use one store without the other only for read-only commands.
+    db_path = _resolve_db_path(args)
+    if not db_path.exists():
+        print(
+            f"Error: database not found at {db_path}\n"
+            "Run `apriori init` to initialise the knowledge graph.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    sqlite_store = SQLiteStore(db_path)
+    if config.storage.enable_dual_write:
+        yaml_path = Path(config.storage.yaml_backup_path)
+        yaml_store = YamlStore(yaml_path)
+        store = DualWriter(sqlite_store=sqlite_store, yaml_store=yaml_store)
+    else:
+        store = sqlite_store  # type: ignore[assignment]
+
     adapter = _build_adapter_from_config(config)
 
     loop = LibrarianLoop(store=store, adapter=adapter, config=config)

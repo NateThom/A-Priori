@@ -133,6 +133,17 @@ def _make_fake_librarian_loop(telemetry: RunTelemetry, call_log: list | None = N
     return _factory
 
 
+def _patch_librarian_run_stores(monkeypatch, tmp_path: Path, store) -> Path:
+    """Shared helper: monkeypatch SQLiteStore, YamlStore, and DualWriter for
+    _cmd_librarian_run tests. Returns the db_file path to use as args.db."""
+    db_file = tmp_path / "db.sqlite"
+    db_file.touch()
+    monkeypatch.setattr("apriori.storage.sqlite_store.SQLiteStore", MagicMock(return_value=store))
+    monkeypatch.setattr("apriori.storage.yaml_store.YamlStore", MagicMock())
+    monkeypatch.setattr("apriori.storage.dual_writer.DualWriter", MagicMock(return_value=store))
+    return db_file
+
+
 def test_librarian_run_invokes_loop_with_correct_iterations(tmp_path: Path, monkeypatch):
     """Given librarian run --iterations 10 --budget 50000,
     when run, then LibrarianLoop.run is called with iterations=10."""
@@ -141,15 +152,15 @@ def test_librarian_run_invokes_loop_with_correct_iterations(tmp_path: Path, monk
     store = _fake_store()
     telemetry = RunTelemetry(total_iterations=10, total_tokens=30000)
     call_log: list[int] = []
+    db_file = _patch_librarian_run_stores(monkeypatch, tmp_path, store)
 
-    monkeypatch.setattr("apriori.shells.cli._build_store_from_args", lambda args: store)
     monkeypatch.setattr("apriori.shells.cli._build_adapter_from_config", lambda config: MagicMock())
     monkeypatch.setattr(
         "apriori.librarian.loop.LibrarianLoop",
         _make_fake_librarian_loop(telemetry, call_log=call_log),
     )
 
-    args = argparse.Namespace(db=None, iterations=10, budget=50000)
+    args = argparse.Namespace(db=str(db_file), iterations=10, budget=50000)
     cli._cmd_librarian_run(args)
     assert call_log == [10]
 
@@ -162,20 +173,20 @@ def test_librarian_run_sets_budget_in_config(tmp_path: Path, monkeypatch):
     store = _fake_store()
     telemetry = RunTelemetry()
     config_log: list = []
+    db_file = _patch_librarian_run_stores(monkeypatch, tmp_path, store)
 
-    monkeypatch.setattr("apriori.shells.cli._build_store_from_args", lambda args: store)
     monkeypatch.setattr("apriori.shells.cli._build_adapter_from_config", lambda config: MagicMock())
     monkeypatch.setattr(
         "apriori.librarian.loop.LibrarianLoop",
         _make_fake_librarian_loop(telemetry, config_log=config_log),
     )
 
-    args = argparse.Namespace(db=None, iterations=5, budget=50000)
+    args = argparse.Namespace(db=str(db_file), iterations=5, budget=50000)
     cli._cmd_librarian_run(args)
     assert config_log[0].budget.max_tokens_per_run == 50000
 
 
-def test_librarian_run_prints_summary(capsys, monkeypatch):
+def test_librarian_run_prints_summary(tmp_path: Path, capsys, monkeypatch):
     """Given a successful run, when complete, then a summary with iteration
     count and token usage is printed."""
     from apriori.shells import cli
@@ -187,20 +198,52 @@ def test_librarian_run_prints_summary(capsys, monkeypatch):
         work_items_resolved=4,
         work_items_failed=1,
     )
+    db_file = _patch_librarian_run_stores(monkeypatch, tmp_path, store)
 
-    monkeypatch.setattr("apriori.shells.cli._build_store_from_args", lambda args: store)
     monkeypatch.setattr("apriori.shells.cli._build_adapter_from_config", lambda config: MagicMock())
     monkeypatch.setattr(
         "apriori.librarian.loop.LibrarianLoop",
         _make_fake_librarian_loop(telemetry),
     )
 
-    args = argparse.Namespace(db=None, iterations=5, budget=None)
+    args = argparse.Namespace(db=str(db_file), iterations=5, budget=None)
     cli._cmd_librarian_run(args)
 
     out = capsys.readouterr().out
     assert "5" in out  # total iterations
     assert "20000" in out or "20,000" in out  # total tokens
+
+
+def test_librarian_run_uses_dual_writer_when_enabled(tmp_path: Path, monkeypatch):
+    """Given config.storage.enable_dual_write=True (the default), when
+    _cmd_librarian_run is called, then DualWriter is constructed wrapping
+    the SQLiteStore (arch:sqlite-vec-storage)."""
+    from apriori.shells import cli
+
+    db_file = tmp_path / "db.sqlite"
+    db_file.touch()
+    store = _fake_store()
+    telemetry = RunTelemetry()
+    dual_writer_calls: list[object] = []
+
+    def fake_dual_writer(*, sqlite_store, yaml_store):
+        dual_writer_calls.append(sqlite_store)
+        return MagicMock()
+
+    monkeypatch.setattr("apriori.storage.sqlite_store.SQLiteStore", MagicMock(return_value=store))
+    monkeypatch.setattr("apriori.storage.yaml_store.YamlStore", MagicMock())
+    monkeypatch.setattr("apriori.storage.dual_writer.DualWriter", fake_dual_writer)
+    monkeypatch.setattr("apriori.shells.cli._build_adapter_from_config", lambda config: MagicMock())
+    monkeypatch.setattr(
+        "apriori.librarian.loop.LibrarianLoop",
+        _make_fake_librarian_loop(telemetry),
+    )
+
+    args = argparse.Namespace(db=str(db_file), iterations=1, budget=None)
+    cli._cmd_librarian_run(args)
+
+    assert dual_writer_calls, "DualWriter was not constructed when enable_dual_write=True"
+    assert dual_writer_calls[0] is store, "DualWriter should wrap the SQLiteStore"
 
 
 # ---------------------------------------------------------------------------
