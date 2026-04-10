@@ -409,6 +409,29 @@ class TestAC5StructuralEdgesUpdated:
         names = {c.name for c in store.list_concepts()}
         assert any("added" in n for n in names)
 
+    def test_structural_edge_change_recomputes_impact_profile_immediately(
+        self, repo: Path, store: SQLiteStore, state_file: Path
+    ) -> None:
+        """Story 12.5 AC1: adding a new structural edge triggers profile recompute."""
+        (repo / "svc.py").write_text(
+            "def base():\n    return 1\n\n\ndef caller():\n    return base()\n"
+        )
+        _commit(repo, "A: initial call graph")
+
+        detector = ChangeDetector(repo_root=repo, store=store, state_file=state_file)
+        detector.run()
+
+        (repo / "svc.py").write_text(
+            "def base():\n    return 1\n\n\ndef helper():\n    return 2\n\n\n"
+            "def caller():\n    return base() + helper()\n"
+        )
+        _commit(repo, "B: add new call edge")
+
+        detector.run()
+
+        helper_after = next(c for c in store.list_concepts() if c.name.endswith("::helper"))
+        assert helper_after.impact_profile is not None
+
 
 # ---------------------------------------------------------------------------
 # AC6: Commit hash tracking

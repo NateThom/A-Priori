@@ -360,6 +360,31 @@ def test_edge_contradiction_flags_both_with_needs_review(
     assert "needs-review" in new_edge.metadata.get("labels", [])
 
 
+def test_semantic_edge_integration_updates_both_endpoint_impact_profiles(
+    store: SQLiteStore, tree: IntegrationDecisionTree
+) -> None:
+    """Story 12.5 AC2: semantic integration refreshes source+target profiles."""
+    source = store.create_concept(_agent_concept("SourceConcept", "Source."))
+    target = store.create_concept(_agent_concept("TargetConcept", "Target."))
+
+    tree.integrate_edge(
+        source_id=source.id,
+        target_id=target.id,
+        edge_type="depends-on",
+        evidence_type="semantic",
+        confidence=0.8,
+    )
+
+    source_after = store.get_concept(source.id)
+    target_after = store.get_concept(target.id)
+    assert source_after is not None
+    assert target_after is not None
+    assert source_after.impact_profile is not None
+    assert target_after.impact_profile is not None
+    assert source_after.impact_profile.last_computed is not None
+    assert target_after.impact_profile.last_computed is not None
+
+
 # ---------------------------------------------------------------------------
 # AC8: Git version stamping on all writes
 # ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from apriori.maintenance.impact_profiles import recompute_profiles_for_concepts
 from apriori.models.concept import Concept
 from apriori.models.work_item import WorkItem
 from apriori.storage.protocol import KnowledgeStore
@@ -284,6 +285,9 @@ class ChangeDetector:
             for ref in concept.code_references:
                 if ref.file_path == str(file_path):
                     old_concepts[concept.name] = concept
+        old_structural_edges = self._structural_edge_fingerprints(
+            {concept.id for concept in old_concepts.values()}
+        )
 
         # Step 2: compute expected new FQNs from the parse result
         new_fqns = _symbols_from_result(result)
@@ -323,6 +327,11 @@ class ChangeDetector:
                 work_item_ids.append(wi.id)
                 concepts_flagged += 1
 
+        self._refresh_impact_profiles_for_structural_edge_changes(
+            file_path=file_path,
+            old_structural_edges=old_structural_edges,
+        )
+
         return work_item_ids, concepts_flagged
 
     def _flag_concept(self, concept: Concept) -> None:
@@ -340,6 +349,44 @@ class ChangeDetector:
             self._flag_concept(concept)
             flagged += 1
         return flagged
+
+    def _refresh_impact_profiles_for_structural_edge_changes(
+        self,
+        *,
+        file_path: Path,
+        old_structural_edges: set[tuple[uuid.UUID, uuid.UUID]],
+    ) -> None:
+        """Recompute affected impact profiles when structural edges changed."""
+        new_concept_ids = {
+            concept.id for concept in self._store.search_by_file(str(file_path))
+        }
+        # Always refresh profiles for concepts tied to the modified file so
+        # blast-radius data stays current immediately after change detection.
+        recompute_profiles_for_concepts(self._store, new_concept_ids)
+        new_edges = self._structural_edge_fingerprints(new_concept_ids)
+        if old_structural_edges == new_edges:
+            return
+
+        affected_ids: set[uuid.UUID] = set()
+        for source_id, target_id in old_structural_edges.symmetric_difference(new_edges):
+            affected_ids.add(source_id)
+            affected_ids.add(target_id)
+
+        recompute_profiles_for_concepts(self._store, affected_ids)
+
+    def _structural_edge_fingerprints(
+        self, concept_ids: set[uuid.UUID]
+    ) -> set[tuple[uuid.UUID, uuid.UUID]]:
+        """Return unique structural edge pairs touching any concept in concept_ids."""
+        fingerprints: set[tuple[uuid.UUID, uuid.UUID]] = set()
+        for concept_id in concept_ids:
+            for edge in self._store.list_edges(source_id=concept_id):
+                if edge.evidence_type == "structural":
+                    fingerprints.add((edge.source_id, edge.target_id))
+            for edge in self._store.list_edges(target_id=concept_id):
+                if edge.evidence_type == "structural":
+                    fingerprints.add((edge.source_id, edge.target_id))
+        return fingerprints
 
     # -----------------------------------------------------------------------
     # State file helpers

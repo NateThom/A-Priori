@@ -31,6 +31,7 @@ import pytest
 from apriori.adapters.base import AnalysisResult, ModelInfo
 from apriori.config import Config, QualityCoRegulationConfig, QualityConfig
 from apriori.models.concept import Concept
+from apriori.models.impact import ImpactProfile
 from apriori.models.librarian_activity import LibrarianActivity
 from apriori.models.work_item import FailureRecord, WorkItem
 from apriori.storage.sqlite_store import SQLiteStore
@@ -712,6 +713,33 @@ class TestPreRunHook:
         loop = LibrarianLoop(store, adapter, config, pre_run_hook=None)
         records, _ = await loop.run(iterations=1)
         assert records == []
+
+    @pytest.mark.asyncio
+    async def test_pre_run_enqueues_analyze_impact_for_stale_profiles(
+        self, store: SQLiteStore, config: Config
+    ):
+        """Story 12.5 AC3: pre-run staleness detection enqueues analyze_impact work."""
+        from apriori.librarian.loop import LibrarianLoop
+
+        stale_profile = ImpactProfile(
+            last_computed=datetime.now(timezone.utc) - timedelta(hours=49)
+        )
+        store.create_concept(
+            Concept(
+                name="StaleImpact",
+                description="Concept with stale blast-radius profile.",
+                created_by="agent",
+                impact_profile=stale_profile,
+            )
+        )
+
+        adapter = _make_adapter([])
+        loop = LibrarianLoop(store, adapter, config, pre_run_hook=None)
+        await loop.run(iterations=0)
+
+        pending = store.get_pending_work_items()
+        analyze_items = [wi for wi in pending if wi.item_type == "analyze_impact"]
+        assert len(analyze_items) == 1
 
 
 # ---------------------------------------------------------------------------

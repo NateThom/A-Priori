@@ -33,11 +33,13 @@ import asyncio
 import logging
 import time
 import uuid
+from datetime import timedelta
 from typing import Callable, Optional
 
 from apriori.adapters.base import LLMAdapter
 from apriori.config import Config
 from apriori.knowledge.integrator import IntegrationAction, IntegrationDecisionTree
+from apriori.maintenance.impact_profiles import enqueue_stale_impact_work_items
 from apriori.librarian.budget import TokenBudgetManager
 from apriori.librarian.prompt_templates import (
     build_librarian_prompt,
@@ -139,6 +141,12 @@ class LibrarianLoop:
         # Pre-run hook (AC-9)
         if self._pre_run_hook is not None:
             self._pre_run_hook()
+        enqueue_stale_impact_work_items(
+            self._store,
+            staleness_threshold=timedelta(
+                hours=self._config.work_queue.impact_profile_staleness_hours
+            ),
+        )
 
         # Retention cleanup: delete resolved items beyond retention window (AC-11)
         deleted = self._store.delete_old_work_items(
