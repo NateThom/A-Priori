@@ -557,12 +557,77 @@ def _cmd_ui(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# blast-radius command
+# ---------------------------------------------------------------------------
+
+
+def _cmd_blast_radius(args: argparse.Namespace) -> None:
+    """Display the pre-computed blast-radius impact profile for a target."""
+    import json as _json
+
+    from apriori.retrieval.blast_radius_query import query_blast_radius
+    from apriori.storage.sqlite_store import SQLiteStore
+
+    db_path = _resolve_db_path(args)
+    use_json = getattr(args, "json", False)
+
+    if not db_path.exists():
+        print(
+            f"Error: database not found at {db_path}\n"
+            "Run `apriori init` to initialise the knowledge graph.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    store = SQLiteStore(db_path)
+    target = args.target
+    max_depth = getattr(args, "depth", None)
+    min_confidence = getattr(args, "min_confidence", None)
+
+    entries = query_blast_radius(store, target, max_depth=max_depth, min_confidence=min_confidence)
+
+    if use_json:
+        print(_json.dumps(
+            [
+                {
+                    "concept_id": str(e.concept_id),
+                    "concept_name": e.concept_name,
+                    "confidence": e.confidence,
+                    "impact_layer": e.impact_layer,
+                    "depth": e.depth,
+                    "relationship_path": e.relationship_path,
+                    "rationale": e.rationale,
+                    "composite_score": e.composite_score,
+                }
+                for e in entries
+            ]
+        ))
+        return
+
+    if not entries:
+        print(f"No blast-radius impact found for '{target}'.")
+        return
+
+    print(f"Blast-radius impact for '{target}' ({len(entries)} entry/entries):\n")
+    for i, entry in enumerate(entries, start=1):
+        print(
+            f"  {i}. {entry.concept_name}"
+            f"  layer={entry.impact_layer}"
+            f"  depth={entry.depth}"
+            f"  confidence={entry.confidence:.2f}"
+            f"  score={entry.composite_score:.3f}"
+        )
+        print(f"     {entry.rationale}")
+    print()
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
-    """Main CLI entry point for the ``apriori`` command."""
+def _build_parser() -> argparse.ArgumentParser:
+    """Build and return the top-level argument parser for the apriori CLI."""
     parser = argparse.ArgumentParser(
         prog="apriori",
         description="A-Priori knowledge graph system",
@@ -704,6 +769,48 @@ def main() -> None:
         help="Enable auto-reload on code changes (development only)",
     )
 
+    # apriori blast-radius
+    br_parser = subparsers.add_parser(
+        "blast-radius",
+        help="Show the pre-computed blast-radius impact profile for a target",
+    )
+    br_parser.add_argument(
+        "target",
+        help="Concept name, UUID, file path, or function symbol to query",
+    )
+    br_parser.add_argument(
+        "--depth",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Maximum hop depth to include (default: no limit)",
+    )
+    br_parser.add_argument(
+        "--min-confidence",
+        type=float,
+        default=None,
+        dest="min_confidence",
+        metavar="FLOAT",
+        help="Minimum confidence threshold (default: no limit)",
+    )
+    br_parser.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Path to SQLite database (default: from config or .apriori/graph.db)",
+    )
+    br_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output results as JSON",
+    )
+
+    return parser
+
+
+def main() -> None:
+    """Main CLI entry point for the ``apriori`` command."""
+    parser = _build_parser()
     args = parser.parse_args()
 
     if args.command == "init":
@@ -718,6 +825,8 @@ def main() -> None:
         _cmd_config(args)
     elif args.command == "ui":
         _cmd_ui(args)
+    elif args.command == "blast-radius":
+        _cmd_blast_radius(args)
     else:
         parser.print_help()
         sys.exit(0)
