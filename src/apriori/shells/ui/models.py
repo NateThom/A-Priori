@@ -51,7 +51,6 @@ class ConceptDetail(BaseModel):
     description: str
     labels: list[str]
     confidence: float
-    code_references: list[dict[str, Any]]
     created_by: str
     verified_by: Optional[str]
     last_verified: Optional[str]

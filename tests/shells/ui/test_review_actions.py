@@ -1,7 +1,9 @@
-"""Tests for Review Action API endpoints — AC traceability: Story 11.2b.
+"""Tests for review workflow API endpoints in shells/ui/server.py.
 
-AC-1 (GET /api/escalated): Given escalated work items exist, when called, then
-    escalated work items with full failure history are returned.
+AC traceability: Story 11.2b migrated to the production API server factory.
+
+AC-1 (GET /api/escalated-items): Given escalated work items exist, when called,
+    then escalated items with full failure history are returned.
 
 AC-2 (POST /api/concepts/{id}/verify): Given a concept exists, when called,
     then the concept is verified and a ReviewOutcome is recorded.
@@ -23,15 +25,17 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from apriori.config import Config
 from apriori.models.concept import Concept
 from apriori.models.work_item import FailureRecord, WorkItem
+from apriori.shells.ui.server import create_app
 from apriori.storage.sqlite_store import SQLiteStore
-import apriori.api.server as api_server
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_concept(**kwargs) -> Concept:
     defaults = dict(name="TestConcept", description="A test concept.", created_by="agent")
@@ -61,6 +65,7 @@ def _make_escalated_item(store: SQLiteStore, concept_id: uuid.UUID) -> WorkItem:
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def store(tmp_path: Path) -> SQLiteStore:
     return SQLiteStore(tmp_path / "test.db")
@@ -68,10 +73,9 @@ def store(tmp_path: Path) -> SQLiteStore:
 
 @pytest.fixture()
 def client(store: SQLiteStore) -> TestClient:
-    """Create a TestClient with a fresh store injected."""
-    api_server._store = store
-    yield TestClient(api_server.app)
-    api_server._store = None
+    """Create a TestClient using the production create_app() factory."""
+    app = create_app(store=store, config=Config())
+    return TestClient(app)
 
 
 @pytest.fixture()
@@ -81,65 +85,74 @@ def concept(store: SQLiteStore) -> Concept:
 
 
 # ---------------------------------------------------------------------------
-# AC-1: GET /api/escalated
+# AC-1: GET /api/escalated-items
 # ---------------------------------------------------------------------------
 
-class TestGetEscalated:
-    """AC-1: GET /api/escalated returns escalated work items with full failure history."""
 
-    def test_escalated_returns_200(self, client: TestClient, store: SQLiteStore, concept: Concept):
-        # Given: an escalated work item
+class TestGetEscalatedItems:
+    """AC-1: escalated endpoint returns full failure history."""
+
+    def test_escalated_returns_200(
+        self,
+        client: TestClient,
+        store: SQLiteStore,
+        concept: Concept,
+    ):
         _make_escalated_item(store, concept.id)
-        # When: GET /api/escalated
-        response = client.get("/api/escalated")
-        # Then: 200 OK
+        response = client.get("/api/escalated-items")
         assert response.status_code == 200
 
-    def test_escalated_returns_list(self, client: TestClient, store: SQLiteStore, concept: Concept):
-        # Given: two escalated items
+    def test_escalated_returns_list(
+        self,
+        client: TestClient,
+        store: SQLiteStore,
+        concept: Concept,
+    ):
         _make_escalated_item(store, concept.id)
         _make_escalated_item(store, concept.id)
-        # When: GET /api/escalated
-        response = client.get("/api/escalated")
+        response = client.get("/api/escalated-items")
         data = response.json()
-        # Then: list of 2 items returned
         assert isinstance(data, list)
         assert len(data) == 2
 
-    def test_escalated_includes_failure_history(self, client: TestClient, store: SQLiteStore, concept: Concept):
-        # Given: an escalated item with a failure record
+    def test_escalated_includes_failure_history(
+        self,
+        client: TestClient,
+        store: SQLiteStore,
+        concept: Concept,
+    ):
         _make_escalated_item(store, concept.id)
-        # When: GET /api/escalated
-        response = client.get("/api/escalated")
+        response = client.get("/api/escalated-items")
         data = response.json()
-        # Then: failure_records are present in the response
         assert len(data) == 1
         item = data[0]
-        assert "failure_records" in item
-        assert len(item["failure_records"]) >= 1
-        assert item["failure_records"][0]["failure_reason"] == "Repeated low quality output."
+        assert "failure_history" in item
+        assert len(item["failure_history"]) >= 1
+        assert item["failure_history"][0]["failure_reason"] == "Repeated low quality output."
 
-    def test_escalated_items_have_escalated_flag(self, client: TestClient, store: SQLiteStore, concept: Concept):
-        # Given: an escalated item
+    def test_escalated_includes_associated_concept(
+        self,
+        client: TestClient,
+        store: SQLiteStore,
+        concept: Concept,
+    ):
         _make_escalated_item(store, concept.id)
-        # When: GET /api/escalated
-        response = client.get("/api/escalated")
+        response = client.get("/api/escalated-items")
         data = response.json()
-        # Then: escalated=True in response
-        assert data[0]["escalated"] is True
+        assert data[0]["associated_concept"]["id"] == str(concept.id)
+        assert data[0]["associated_concept"]["name"] == concept.name
 
     def test_escalated_empty_when_no_items(self, client: TestClient):
-        # Given: no work items in store
-        # When: GET /api/escalated
-        response = client.get("/api/escalated")
-        # Then: empty list
+        response = client.get("/api/escalated-items")
         assert response.status_code == 200
         assert response.json() == []
 
     def test_escalated_only_returns_escalated_items(
-        self, client: TestClient, store: SQLiteStore, concept: Concept
+        self,
+        client: TestClient,
+        store: SQLiteStore,
+        concept: Concept,
     ):
-        # Given: one normal (non-escalated) work item and one escalated item
         normal = WorkItem(
             item_type="verify_concept",
             concept_id=concept.id,
@@ -147,94 +160,84 @@ class TestGetEscalated:
         )
         store.create_work_item(normal)
         _make_escalated_item(store, concept.id)
-        # When: GET /api/escalated
-        response = client.get("/api/escalated")
+
+        response = client.get("/api/escalated-items")
         data = response.json()
-        # Then: only the escalated item is returned
+
         assert len(data) == 1
-        assert data[0]["escalated"] is True
+        assert data[0]["failure_count"] >= 1
 
 
 # ---------------------------------------------------------------------------
 # AC-2: POST /api/concepts/{id}/verify
 # ---------------------------------------------------------------------------
 
+
 class TestVerifyConcept:
-    """AC-2: POST /api/concepts/{id}/verify verifies concept and records ReviewOutcome."""
+    """AC-2: verify endpoint records verification outcome."""
 
     def test_verify_returns_200(self, client: TestClient, concept: Concept):
-        # When: POST verify
         response = client.post(
             f"/api/concepts/{concept.id}/verify",
             json={"reviewer": "alice"},
         )
-        # Then: 200 OK
         assert response.status_code == 200
 
     def test_verify_response_contains_concept_and_outcome(
-        self, client: TestClient, concept: Concept
+        self,
+        client: TestClient,
+        concept: Concept,
     ):
-        # When: POST verify
         response = client.post(
             f"/api/concepts/{concept.id}/verify",
             json={"reviewer": "alice"},
         )
         data = response.json()
-        # Then: response has concept and review_outcome
+        assert "message" in data
         assert "concept" in data
         assert "review_outcome" in data
 
     def test_verify_concept_has_verified_by(self, client: TestClient, concept: Concept):
-        # When: POST verify
         response = client.post(
             f"/api/concepts/{concept.id}/verify",
             json={"reviewer": "alice"},
         )
         data = response.json()
-        # Then: verified_by is set
         assert data["concept"]["verified_by"] == "alice"
 
     def test_verify_review_outcome_action_is_verified(
-        self, client: TestClient, concept: Concept
+        self,
+        client: TestClient,
+        concept: Concept,
     ):
-        # When: POST verify
         response = client.post(
             f"/api/concepts/{concept.id}/verify",
             json={"reviewer": "alice"},
         )
         data = response.json()
-        # Then: review_outcome has action=verified
         assert data["review_outcome"]["action"] == "verified"
         assert data["review_outcome"]["reviewer"] == "alice"
 
     def test_verify_boosts_confidence(self, client: TestClient, concept: Concept):
-        # Given: concept with confidence=0.5
-        # When: POST verify
         response = client.post(
             f"/api/concepts/{concept.id}/verify",
             json={"reviewer": "alice"},
         )
         data = response.json()
-        # Then: confidence boosted
         assert data["concept"]["confidence"] == pytest.approx(0.6)
 
     def test_verify_returns_404_for_unknown_concept(self, client: TestClient):
-        # Given: non-existent concept_id
-        # When: POST verify
         response = client.post(
             f"/api/concepts/{uuid.uuid4()}/verify",
             json={"reviewer": "alice"},
         )
-        # Then: 404
         assert response.status_code == 404
 
     def test_verify_requires_reviewer(self, client: TestClient, concept: Concept):
-        # When: POST verify without reviewer
         response = client.post(
             f"/api/concepts/{concept.id}/verify",
             json={},
         )
-        # Then: 422 Unprocessable Entity
         assert response.status_code == 422
 
 
@@ -242,35 +245,35 @@ class TestVerifyConcept:
 # AC-3: POST /api/concepts/{id}/correct
 # ---------------------------------------------------------------------------
 
+
 class TestCorrectConcept:
-    """AC-3: POST /api/concepts/{id}/correct with error_type updates concept and records ReviewOutcome."""
+    """AC-3: correct endpoint updates concept and records correction outcome."""
 
     def test_correct_returns_200(self, client: TestClient, concept: Concept):
-        # When: POST correct
         response = client.post(
             f"/api/concepts/{concept.id}/correct",
             json={"reviewer": "bob", "error_type": "description_wrong"},
         )
-        # Then: 200 OK
         assert response.status_code == 200
 
     def test_correct_response_contains_concept_and_outcome(
-        self, client: TestClient, concept: Concept
+        self,
+        client: TestClient,
+        concept: Concept,
     ):
-        # When: POST correct
         response = client.post(
             f"/api/concepts/{concept.id}/correct",
             json={"reviewer": "bob", "error_type": "relationship_missing"},
         )
         data = response.json()
-        # Then: response has concept and review_outcome
         assert "concept" in data
         assert "review_outcome" in data
 
     def test_correct_review_outcome_records_error_type(
-        self, client: TestClient, concept: Concept
+        self,
+        client: TestClient,
+        concept: Concept,
     ):
-        # When: POST correct
         response = client.post(
             f"/api/concepts/{concept.id}/correct",
             json={
@@ -280,13 +283,11 @@ class TestCorrectConcept:
             },
         )
         data = response.json()
-        # Then: error_type recorded in review_outcome
         assert data["review_outcome"]["action"] == "corrected"
         assert data["review_outcome"]["error_type"] == "relationship_missing"
         assert data["review_outcome"]["correction_details"] == "Edge to DatabasePool is missing."
 
     def test_correct_all_valid_error_types(self, client: TestClient, store: SQLiteStore):
-        # Given: all five valid error types
         valid_types = [
             "description_wrong",
             "relationship_missing",
@@ -296,45 +297,68 @@ class TestCorrectConcept:
         ]
         for error_type in valid_types:
             c = _make_concept(name=f"Concept_{error_type}")
-            concept = store.create_concept(c)
+            created = store.create_concept(c)
             response = client.post(
-                f"/api/concepts/{concept.id}/correct",
+                f"/api/concepts/{created.id}/correct",
                 json={"reviewer": "bob", "error_type": error_type},
             )
             assert response.status_code == 200, f"Failed for error_type={error_type}"
             data = response.json()
             assert data["review_outcome"]["error_type"] == error_type
 
-    def test_correct_returns_422_for_invalid_error_type(
-        self, client: TestClient, concept: Concept
+    def test_correct_accepts_description_and_relationships(
+        self,
+        client: TestClient,
+        concept: Concept,
     ):
-        # When: POST correct with an invalid error_type
+        relationships = [
+            {
+                "target_name": "DatabasePool",
+                "edge_type": "depends-on",
+                "confidence": 0.9,
+            }
+        ]
+        response = client.post(
+            f"/api/concepts/{concept.id}/correct",
+            json={
+                "reviewer": "bob",
+                "error_type": "relationship_missing",
+                "description": "Updated concept description",
+                "relationships": relationships,
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["concept"]["description"] == "Updated concept description"
+        assert data["concept"]["metadata"]["relationship_corrections"] == relationships
+
+    def test_correct_returns_422_for_invalid_error_type(
+        self,
+        client: TestClient,
+        concept: Concept,
+    ):
         response = client.post(
             f"/api/concepts/{concept.id}/correct",
             json={"reviewer": "bob", "error_type": "invalid_type"},
         )
-        # Then: 422
         assert response.status_code == 422
 
     def test_correct_returns_404_for_unknown_concept(self, client: TestClient):
-        # Given: non-existent concept_id
-        # When: POST correct
         response = client.post(
             f"/api/concepts/{uuid.uuid4()}/correct",
             json={"reviewer": "bob", "error_type": "description_wrong"},
         )
-        # Then: 404
         assert response.status_code == 404
 
     def test_correct_without_correction_details_is_valid(
-        self, client: TestClient, concept: Concept
+        self,
+        client: TestClient,
+        concept: Concept,
     ):
-        # When: POST correct without correction_details
         response = client.post(
             f"/api/concepts/{concept.id}/correct",
             json={"reviewer": "bob", "error_type": "other"},
         )
-        # Then: 200 OK
         assert response.status_code == 200
         data = response.json()
         assert data["review_outcome"]["correction_details"] is None
@@ -344,83 +368,75 @@ class TestCorrectConcept:
 # AC-4: POST /api/concepts/{id}/flag
 # ---------------------------------------------------------------------------
 
+
 class TestFlagConcept:
-    """AC-4: POST /api/concepts/{id}/flag flags concept and creates review_concept work item."""
+    """AC-4: flag endpoint creates review item and applies needs-review label."""
 
     def test_flag_returns_200(self, client: TestClient, concept: Concept):
-        # When: POST flag
         response = client.post(
             f"/api/concepts/{concept.id}/flag",
             json={"reviewer": "carol"},
         )
-        # Then: 200 OK
         assert response.status_code == 200
 
     def test_flag_response_contains_concept_outcome_and_work_item(
-        self, client: TestClient, concept: Concept
+        self,
+        client: TestClient,
+        concept: Concept,
     ):
-        # When: POST flag
         response = client.post(
             f"/api/concepts/{concept.id}/flag",
             json={"reviewer": "carol"},
         )
         data = response.json()
-        # Then: response has concept, review_outcome, and work_item
         assert "concept" in data
         assert "review_outcome" in data
         assert "work_item" in data
 
     def test_flag_applies_needs_review_label(self, client: TestClient, concept: Concept):
-        # When: POST flag
         response = client.post(
             f"/api/concepts/{concept.id}/flag",
             json={"reviewer": "carol"},
         )
         data = response.json()
-        # Then: needs-review label applied to concept
         assert "needs-review" in data["concept"]["labels"]
 
     def test_flag_review_outcome_action_is_flagged(
-        self, client: TestClient, concept: Concept
+        self,
+        client: TestClient,
+        concept: Concept,
     ):
-        # When: POST flag
         response = client.post(
             f"/api/concepts/{concept.id}/flag",
             json={"reviewer": "carol"},
         )
         data = response.json()
-        # Then: review_outcome has action=flagged
         assert data["review_outcome"]["action"] == "flagged"
         assert data["review_outcome"]["reviewer"] == "carol"
 
     def test_flag_creates_review_concept_work_item(
-        self, client: TestClient, concept: Concept
+        self,
+        client: TestClient,
+        concept: Concept,
     ):
-        # When: POST flag
         response = client.post(
             f"/api/concepts/{concept.id}/flag",
             json={"reviewer": "carol"},
         )
         data = response.json()
-        # Then: work_item type is review_concept
         assert data["work_item"]["item_type"] == "review_concept"
         assert data["work_item"]["concept_id"] == str(concept.id)
 
     def test_flag_returns_404_for_unknown_concept(self, client: TestClient):
-        # Given: non-existent concept_id
-        # When: POST flag
         response = client.post(
             f"/api/concepts/{uuid.uuid4()}/flag",
             json={"reviewer": "carol"},
         )
-        # Then: 404
         assert response.status_code == 404
 
     def test_flag_requires_reviewer(self, client: TestClient, concept: Concept):
-        # When: POST flag without reviewer
         response = client.post(
             f"/api/concepts/{concept.id}/flag",
             json={},
         )
-        # Then: 422 Unprocessable Entity
         assert response.status_code == 422
