@@ -299,19 +299,52 @@ def get_status() -> dict:
 
 @mcp.tool()
 @safe_tool
-def blast_radius(concept_id: str) -> str:
-    """Analyse the blast radius of changes to a concept (Phase 3 placeholder).
+def blast_radius(
+    target: str,
+    depth: Optional[int] = None,
+    min_confidence: Optional[float] = None,
+) -> list:
+    """Return the pre-computed blast-radius impact profile for a target.
 
-    This tool is not yet implemented. It will be available in Phase 3 once the
-    impact analysis pipeline is complete.
+    Accepts a concept name, concept UUID, file path, or function symbol and
+    returns a prioritised list of impacted concepts sorted by composite score
+    (``confidence * 1/depth``).  All business logic lives in
+    :mod:`apriori.retrieval.blast_radius_query` (arch:mcp-thin-shell).
 
     Args:
-        concept_id: UUID string of the concept to analyse.
+        target: Concept name, UUID string, file path, or function symbol.
+        depth: Maximum hop depth to include (default: no limit).
+        min_confidence: Minimum confidence threshold (default: no limit).
 
     Returns:
-        Placeholder message indicating the feature is not yet available.
+        List of impact entry dicts, each with keys: ``concept_id``,
+        ``concept_name``, ``confidence``, ``impact_layer``, ``depth``,
+        ``relationship_path``, ``rationale``, ``composite_score``.
+        Sorted by ``composite_score`` descending.  Empty list when *target*
+        cannot be resolved or has no stored impact profile.
     """
-    return "Blast radius analysis is not yet available. This feature is planned for Phase 3."
+    from apriori.retrieval.blast_radius_query import query_blast_radius
+
+    store = _get_store()
+    entries = query_blast_radius(
+        store,
+        target,
+        max_depth=depth,
+        min_confidence=min_confidence,
+    )
+    return [
+        {
+            "concept_id": str(e.concept_id),
+            "concept_name": e.concept_name,
+            "confidence": e.confidence,
+            "impact_layer": e.impact_layer,
+            "depth": e.depth,
+            "relationship_path": e.relationship_path,
+            "rationale": e.rationale,
+            "composite_score": e.composite_score,
+        }
+        for e in entries
+    ]
 
 
 # ---------------------------------------------------------------------------

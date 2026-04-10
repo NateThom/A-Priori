@@ -284,24 +284,23 @@ def test_get_status_returns_zeros_for_empty_graph(store: SQLiteStore) -> None:
 
 
 # ---------------------------------------------------------------------------
-# AC8: blast_radius — placeholder
+# AC8: blast_radius — now a real tool (Phase 3 replacement)
 # ---------------------------------------------------------------------------
 
-def test_blast_radius_returns_placeholder_message(store: SQLiteStore) -> None:
-    """Given Phase 1, blast_radius returns a 'not yet available' message."""
+def test_blast_radius_returns_list(store: SQLiteStore) -> None:
+    """Given a target, blast_radius returns a list (Phase 3 real implementation)."""
     result = mcp_server.blast_radius(str(uuid.uuid4()))
 
-    assert isinstance(result, str)
-    assert "not yet available" in result.lower()
+    assert isinstance(result, list)
 
 
-def test_blast_radius_accepts_any_concept_id(store: SQLiteStore) -> None:
-    """blast_radius returns placeholder regardless of whether the concept exists."""
+def test_blast_radius_returns_empty_for_concept_without_profile(store: SQLiteStore) -> None:
+    """blast_radius returns an empty list for a concept with no impact profile."""
     c = store.create_concept(_concept("SomeConcept"))
 
     result = mcp_server.blast_radius(str(c.id))
 
-    assert "not yet available" in result.lower()
+    assert result == []
 
 
 # ---------------------------------------------------------------------------
