@@ -586,6 +586,28 @@ class KnowledgeStore(Protocol):
         ...
 
     # -------------------------------------------------------------------------
+    # Embedding operations
+    # -------------------------------------------------------------------------
+
+    def store_embedding(self, concept_id: uuid.UUID, vector: list[float]) -> None:
+        """Persist a pre-computed embedding vector for a Concept.
+
+        Replaces any existing embedding for the concept. This is the protocol
+        entry point for batch embedding writes — callers must never issue raw
+        SQL directly (arch:no-raw-sql).
+
+        Args:
+            concept_id: The UUID of the Concept whose embedding to store.
+            vector: A list of floats representing the embedding. Length must
+                match the model's output dimensions (768 for e5-base-v2).
+
+        Side effects:
+            Writes to the sqlite-vec ``concept_embeddings`` table only.
+            Embeddings are never dual-written to YAML.
+        """
+        ...
+
+    # -------------------------------------------------------------------------
     # Bulk operations
     # -------------------------------------------------------------------------
 

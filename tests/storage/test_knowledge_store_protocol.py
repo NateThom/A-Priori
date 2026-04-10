@@ -318,6 +318,11 @@ class _InMemoryStore:
         with_profile = sum(1 for c in self._concepts.values() if c.impact_profile is not None)
         return with_profile, total
 
+    # --- Embedding operations ---
+
+    def store_embedding(self, concept_id: uuid.UUID, vector: list[float]) -> None:
+        pass  # no-op in in-memory store
+
     # --- Bulk operations ---
 
     def rebuild_index(self) -> None:
