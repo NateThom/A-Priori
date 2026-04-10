@@ -18,14 +18,14 @@ AC traceability:
 
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 import pytest
 from fastapi.testclient import TestClient
 
 from apriori.config import Config
-from apriori.models.concept import CodeReference
-from apriori.models.concept import Concept
+from apriori.models.concept import CodeReference, Concept
 from apriori.models.edge import Edge
 from apriori.models.impact import ImpactProfile, ImpactEntry
 from apriori.models.librarian_activity import LibrarianActivity
@@ -1070,6 +1070,105 @@ class TestGetHealth:
             value = data["metrics"][key]
             assert isinstance(value, float)
             assert 0.0 <= value <= 1.0, f"{key}={value} not in [0,1]"
+
+
+# ---------------------------------------------------------------------------
+# Story 11.5: Review Workflow UI
+# ---------------------------------------------------------------------------
+
+
+class TestReviewWorkflowUI:
+    def test_concept_detail_includes_referenced_code_snippet(
+        self, client: TestClient, store: _TestStore, tmp_path: Path
+    ) -> None:
+        """Given a concept with code refs, detail view includes inline referenced code."""
+        file_path = tmp_path / "review_target.py"
+        file_path.write_text("line1\nline2\nline3\nline4\n", encoding="utf-8")
+        concept = Concept(
+            name="ReviewedConcept",
+            description="Needs human review",
+            created_by="agent",
+            code_references=[
+                CodeReference(
+                    symbol="module.fn",
+                    file_path=str(file_path),
+                    line_range=(2, 3),
+                    content_hash="a" * 64,
+                    semantic_anchor="function body",
+                )
+            ],
+        )
+        store.create_concept(concept)
+
+        response = client.get(f"/api/concepts/{concept.id}")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["code_references"]) == 1
+        assert data["code_references"][0]["snippet"] == "line2\nline3"
+
+    def test_verify_marks_concept_verified_and_returns_confirmation(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """Given Verify action, concept is marked verified and confirmation is returned."""
+        concept = _make_concept("ToVerify")
+        store.create_concept(concept)
+
+        response = client.post(
+            f"/api/concepts/{concept.id}/verify",
+            json={"reviewer": "alice"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["message"] == "Concept verified successfully."
+        assert data["concept"]["verified_by"] == "alice"
+        assert data["review_outcome"]["action"] == "verified"
+
+    def test_flag_creates_review_concept_work_item(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """Given Flag action, concept is flagged and review_concept item is created."""
+        concept = _make_concept("ToFlag")
+        store.create_concept(concept)
+
+        response = client.post(
+            f"/api/concepts/{concept.id}/flag",
+            json={"reviewer": "carol"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert "needs-review" in data["concept"]["labels"]
+        assert data["review_outcome"]["action"] == "flagged"
+        assert data["work_item"]["item_type"] == "review_concept"
+
+    def test_correct_updates_concept_and_records_outcome(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """Given Correct submit, concept is updated and correction outcome recorded."""
+        concept = _make_concept("ToCorrect")
+        store.create_concept(concept)
+
+        response = client.post(
+            f"/api/concepts/{concept.id}/correct",
+            json={
+                "reviewer": "bob",
+                "error_type": "description_wrong",
+                "description": "Updated description from reviewer.",
+                "relationships": [{"edge_type": "depends-on", "target_symbol": "module.X"}],
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["concept"]["description"] == "Updated description from reviewer."
+        assert data["review_outcome"]["action"] == "corrected"
+        assert data["review_outcome"]["error_type"] == "description_wrong"
+
+    def test_error_types_endpoint_returns_dropdown_options(self, client: TestClient) -> None:
+        """Correction form options are available via error-type endpoint."""
+        response = client.get("/api/review/error-types")
+        assert response.status_code == 200
+        data = response.json()
+        assert "error_types" in data
+        assert "description_wrong" in data["error_types"]
 
 
 # ---------------------------------------------------------------------------

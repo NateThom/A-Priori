@@ -35,6 +35,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+pythonpath = ["src"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/apriori"]

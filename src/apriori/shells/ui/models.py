@@ -32,6 +32,17 @@ class EdgeSummary(BaseModel):
     confidence: float
 
 
+class CodeReferenceView(BaseModel):
+    """Code reference plus optional inline snippet for review workflows."""
+
+    symbol: str
+    file_path: str
+    line_range: Optional[tuple[int, int]]
+    semantic_anchor: str
+    is_unresolved: bool
+    snippet: Optional[str]
+
+
 class ConceptDetail(BaseModel):
     """Full concept with edges and impact profile for the detail endpoint."""
 
@@ -49,6 +60,7 @@ class ConceptDetail(BaseModel):
     created_at: str
     updated_at: str
     edges: list[EdgeSummary]
+    code_references: list[CodeReferenceView]
 
 
 class CytoscapeNodeData(BaseModel):
