@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
@@ -97,11 +97,24 @@ def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
             description=concept.description,
             labels=sorted(concept.labels),
             confidence=concept.confidence,
+            code_references=[
+                {
+                    "symbol": ref.symbol,
+                    "file_path": ref.file_path,
+                    "line_range": ref.line_range,
+                    "content_hash": ref.content_hash,
+                    "semantic_anchor": ref.semantic_anchor,
+                    "derived_from_code_version": ref.derived_from_code_version,
+                    "is_unresolved": ref.is_unresolved,
+                }
+                for ref in concept.code_references
+            ],
             created_by=concept.created_by,
             verified_by=concept.verified_by,
             last_verified=(
                 concept.last_verified.isoformat() if concept.last_verified else None
             ),
+            derived_from_code_version=concept.derived_from_code_version,
             impact_profile=(
                 concept.impact_profile.model_dump() if concept.impact_profile else None
             ),
@@ -109,6 +122,27 @@ def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
             updated_at=concept.updated_at.isoformat(),
             edges=[_to_edge_summary(e) for e in edges],
         )
+
+    def _confidence_bucket(confidence: float) -> str:
+        if confidence >= 0.8:
+            return "high"
+        if confidence >= 0.5:
+            return "medium"
+        return "low"
+
+    def _node_visuals(bucket: str) -> tuple[float, str]:
+        if bucket == "high":
+            return 0.95, "#0f766e"
+        if bucket == "medium":
+            return 0.72, "#b45309"
+        return 0.48, "#b91c1c"
+
+    def _edge_visuals(bucket: str) -> tuple[float, str]:
+        if bucket == "high":
+            return 0.9, "solid"
+        if bucket == "medium":
+            return 0.65, "solid"
+        return 0.42, "dashed"
 
     def _to_activity_item(wi) -> ActivityItem:
         return ActivityItem(
@@ -166,6 +200,13 @@ def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
     async def get_graph(
         center: uuid.UUID,
         radius: int = Query(default=2, ge=1, le=5),
+        edge_type: Optional[str] = Query(default=None),
+        min_confidence: float = Query(default=0.0, ge=0.0, le=1.0),
+        highlight_label: Optional[str] = Query(default=None),
+        layout: Literal["force-directed", "breadthfirst"] = Query(
+            default="force-directed"
+        ),
+        max_nodes: int = Query(default=500, ge=1, le=500),
     ) -> GraphResponse:
         """Return a subgraph rooted at ``center`` within ``radius`` hops.
 
@@ -173,16 +214,31 @@ def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
         decision: ``{nodes: [{data: {id, label, type}}], edges: [{data: {id,
         source, target, weight}}]}``.
         """
-        concepts = await asyncio.to_thread(store.traverse_graph, center, radius)
+        traversed = await asyncio.to_thread(store.traverse_graph, center, radius)
+        concepts = [
+            concept for concept in traversed if concept.confidence >= min_confidence
+        ][:max_nodes]
         concept_ids = {c.id for c in concepts}
 
         # Collect all edges whose both endpoints are in the subgraph
         all_edges = []
+        seen_edge_ids: set[uuid.UUID] = set()
         for concept in concepts:
             edges = await asyncio.to_thread(store.list_edges, concept.id)
             for edge in edges:
-                if edge.target_id in concept_ids and edge.id not in {e.id for e in all_edges}:
+                edge_matches_type = (
+                    edge_type is None
+                    or edge.edge_type == edge_type
+                    or edge.evidence_type == edge_type
+                )
+                if (
+                    edge.target_id in concept_ids
+                    and edge.confidence >= min_confidence
+                    and edge_matches_type
+                    and edge.id not in seen_edge_ids
+                ):
                     all_edges.append(edge)
+                    seen_edge_ids.add(edge.id)
 
         nodes = [
             CytoscapeNode(
@@ -190,6 +246,12 @@ def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
                     id=str(c.id),
                     label=c.name,
                     type=next(iter(c.labels), "concept") if c.labels else "concept",
+                    labels=sorted(c.labels),
+                    confidence=c.confidence,
+                    highlighted=bool(highlight_label and highlight_label in c.labels),
+                    confidence_bucket=_confidence_bucket(c.confidence),
+                    visual_opacity=_node_visuals(_confidence_bucket(c.confidence))[0],
+                    visual_color=_node_visuals(_confidence_bucket(c.confidence))[1],
                 )
             )
             for c in concepts
@@ -201,11 +263,17 @@ def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
                     source=str(e.source_id),
                     target=str(e.target_id),
                     weight=e.confidence,
+                    edge_type=e.edge_type,
+                    evidence_type=e.evidence_type,
+                    confidence=e.confidence,
+                    confidence_bucket=_confidence_bucket(e.confidence),
+                    visual_opacity=_edge_visuals(_confidence_bucket(e.confidence))[0],
+                    visual_line_style=_edge_visuals(_confidence_bucket(e.confidence))[1],
                 )
             )
             for e in all_edges
         ]
-        return GraphResponse(nodes=nodes, edges=edges_cy)
+        return GraphResponse(nodes=nodes, edges=edges_cy, layout=layout)
 
     @app.get(
         "/api/activity",

@@ -16,6 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from apriori.config import Config
+from apriori.models.concept import CodeReference
 from apriori.models.concept import Concept
 from apriori.models.edge import Edge
 from apriori.models.impact import ImpactProfile, ImpactEntry
@@ -320,12 +321,20 @@ def _make_concept(name: str = "TestConcept", labels: set[str] | None = None) -> 
     )
 
 
-def _make_edge(source_id: uuid.UUID, target_id: uuid.UUID) -> Edge:
+def _make_edge(
+    source_id: uuid.UUID,
+    target_id: uuid.UUID,
+    *,
+    edge_type: str = "depends-on",
+    evidence_type: str = "semantic",
+    confidence: float = 1.0,
+) -> Edge:
     return Edge(
         source_id=source_id,
         target_id=target_id,
-        edge_type="depends-on",
-        evidence_type="semantic",
+        edge_type=edge_type,
+        evidence_type=evidence_type,  # type: ignore[arg-type]
+        confidence=confidence,
     )
 
 
@@ -471,6 +480,33 @@ class TestGetConcept:
         assert data["impact_profile"] is not None
         assert len(data["impact_profile"]["structural_impact"]) == 1
 
+    def test_includes_code_references_for_click_to_inspect(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """Given concept references, detail payload includes full code references."""
+        concept = Concept(
+            name="Inspectable",
+            description="For click detail.",
+            created_by="agent",
+            code_references=[
+                CodeReference(
+                    symbol="pkg.module.inspectable",
+                    file_path="src/pkg/module.py",
+                    line_range=(10, 32),
+                    content_hash="a" * 64,
+                    semantic_anchor="function inspectable",
+                )
+            ],
+        )
+        store.create_concept(concept)
+
+        response = client.get(f"/api/concepts/{concept.id}")
+        assert response.status_code == 200
+        data = response.json()
+        assert "code_references" in data
+        assert len(data["code_references"]) == 1
+        assert data["code_references"][0]["file_path"] == "src/pkg/module.py"
+
     def test_returns_concept_with_no_edges(
         self, client: TestClient, store: _TestStore
     ) -> None:
@@ -586,6 +622,143 @@ class TestGetGraph:
         data = response.json()
         assert data["nodes"] == []
         assert data["edges"] == []
+
+
+class TestGetGraphVisualizationFilters:
+    def test_filter_by_edge_type_structural_only(self, client: TestClient, store: _TestStore) -> None:
+        """Edge filter keeps only structural relationships in graph payload."""
+        center = _make_concept("Center")
+        structural_target = _make_concept("StructuralTarget")
+        semantic_target = _make_concept("SemanticTarget")
+        store.create_concept(center)
+        store.create_concept(structural_target)
+        store.create_concept(semantic_target)
+        store.create_edge(
+            _make_edge(
+                center.id,
+                structural_target.id,
+                edge_type="calls",
+                evidence_type="structural",
+                confidence=0.9,
+            )
+        )
+        store.create_edge(
+            _make_edge(
+                center.id,
+                semantic_target.id,
+                edge_type="depends-on",
+                evidence_type="semantic",
+                confidence=0.9,
+            )
+        )
+
+        response = client.get(f"/api/graph?center={center.id}&radius=2&edge_type=structural")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["edges"]) == 1
+        assert data["edges"][0]["data"]["evidence_type"] == "structural"
+
+    def test_filter_by_min_confidence_applies_to_nodes_and_edges(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """min_confidence removes low-confidence nodes and low-confidence edges."""
+        center = Concept(
+            name="Center",
+            description="center",
+            created_by="agent",
+            confidence=0.95,
+        )
+        high = Concept(
+            name="High",
+            description="high",
+            created_by="agent",
+            confidence=0.8,
+        )
+        low = Concept(
+            name="Low",
+            description="low",
+            created_by="agent",
+            confidence=0.3,
+        )
+        store.create_concept(center)
+        store.create_concept(high)
+        store.create_concept(low)
+        store.create_edge(_make_edge(center.id, high.id, confidence=0.85))
+        store.create_edge(_make_edge(center.id, low.id, confidence=0.65))
+
+        response = client.get(f"/api/graph?center={center.id}&radius=2&min_confidence=0.7")
+        assert response.status_code == 200
+        data = response.json()
+        node_ids = {n["data"]["id"] for n in data["nodes"]}
+        assert str(center.id) in node_ids
+        assert str(high.id) in node_ids
+        assert str(low.id) not in node_ids
+        assert len(data["edges"]) == 1
+        assert data["edges"][0]["data"]["target"] == str(high.id)
+
+    def test_label_filter_highlights_matching_nodes(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """highlight_label marks matching concepts without removing others."""
+        center = _make_concept("Center")
+        needs_review = _make_concept("NeedsReview", labels={"needs-review"})
+        other = _make_concept("Other", labels={"verified"})
+        store.create_concept(center)
+        store.create_concept(needs_review)
+        store.create_concept(other)
+        store.create_edge(_make_edge(center.id, needs_review.id, confidence=0.9))
+        store.create_edge(_make_edge(center.id, other.id, confidence=0.9))
+
+        response = client.get(
+            f"/api/graph?center={center.id}&radius=2&highlight_label=needs-review"
+        )
+        assert response.status_code == 200
+        data = response.json()
+        highlighted = {
+            n["data"]["label"]: n["data"]["highlighted"] for n in data["nodes"]
+        }
+        assert highlighted["NeedsReview"] is True
+        assert highlighted["Other"] is False
+
+    def test_high_and_low_confidence_are_visually_distinct(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """High and low confidence nodes expose different visual styling metadata."""
+        center = _make_concept("Center")
+        high = Concept(name="High", description="high", created_by="agent", confidence=0.9)
+        low = Concept(name="Low", description="low", created_by="agent", confidence=0.3)
+        store.create_concept(center)
+        store.create_concept(high)
+        store.create_concept(low)
+        store.create_edge(_make_edge(center.id, high.id, confidence=0.9))
+        store.create_edge(_make_edge(center.id, low.id, confidence=0.3))
+
+        response = client.get(f"/api/graph?center={center.id}&radius=2")
+        assert response.status_code == 200
+        data = response.json()
+        nodes = {n["data"]["label"]: n["data"] for n in data["nodes"]}
+        assert nodes["High"]["confidence_bucket"] != nodes["Low"]["confidence_bucket"]
+        assert nodes["High"]["visual_opacity"] != nodes["Low"]["visual_opacity"]
+
+    def test_layout_defaults_force_directed_and_supports_toggle(
+        self, client: TestClient, store: _TestStore
+    ) -> None:
+        """Graph response declares default layout and supports explicit override."""
+        center = _make_concept("Center")
+        neighbor = _make_concept("Neighbor")
+        store.create_concept(center)
+        store.create_concept(neighbor)
+        store.create_edge(_make_edge(center.id, neighbor.id))
+
+        default_response = client.get(f"/api/graph?center={center.id}&radius=2")
+        assert default_response.status_code == 200
+        assert default_response.json()["layout"] == "force-directed"
+
+        override_response = client.get(
+            f"/api/graph?center={center.id}&radius=2&layout=breadthfirst"
+        )
+        assert override_response.status_code == 200
+        assert override_response.json()["layout"] == "breadthfirst"
 
 
 # ---------------------------------------------------------------------------
