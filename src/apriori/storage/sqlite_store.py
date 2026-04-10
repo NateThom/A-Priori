@@ -1082,6 +1082,12 @@ class SQLiteStore:
             return 0, 0
         return int(row[1]), int(row[0])
 
+    def get_last_parse_timestamp(self) -> str | None:
+        """Return the ISO-8601 timestamp of the most recently updated Concept."""
+        conn = self._get_connection()
+        row = conn.execute("SELECT MAX(updated_at) FROM concepts").fetchone()
+        return row[0] if row and row[0] else None
+
     # -----------------------------------------------------------------------
     # Bulk operations
     # -----------------------------------------------------------------------

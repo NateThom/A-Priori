@@ -585,6 +585,18 @@ class KnowledgeStore(Protocol):
         """
         ...
 
+    def get_last_parse_timestamp(self) -> Optional[str]:
+        """Return the ISO-8601 timestamp of the most recently updated Concept.
+
+        Used by the CLI ``status`` command to show when the graph was last
+        populated.  Returns ``None`` when no Concepts exist.
+
+        Returns:
+            An ISO-8601 string (e.g. ``"2026-04-10T12:34:56+00:00"``) or
+            ``None`` if the store is empty.
+        """
+        ...
+
     # -------------------------------------------------------------------------
     # Embedding operations
     # -------------------------------------------------------------------------

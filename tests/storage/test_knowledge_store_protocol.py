@@ -318,6 +318,14 @@ class _InMemoryStore:
         with_profile = sum(1 for c in self._concepts.values() if c.impact_profile is not None)
         return with_profile, total
 
+    def get_last_parse_timestamp(self) -> str | None:
+        if not self._concepts:
+            return None
+        return max(
+            c.updated_at.isoformat() for c in self._concepts.values()
+            if c.updated_at is not None
+        ) or None
+
     # --- Embedding operations ---
 
     def store_embedding(self, concept_id: uuid.UUID, vector: list[float]) -> None:

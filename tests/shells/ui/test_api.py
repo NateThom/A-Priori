@@ -310,6 +310,9 @@ class _TestStore:
         )
         return with_profile, total
 
+    def get_last_parse_timestamp(self) -> str | None:
+        return None
+
     def rebuild_index(self) -> None:
         pass
 

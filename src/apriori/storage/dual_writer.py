@@ -305,6 +305,9 @@ class DualWriter:
     def count_blast_radius_complete(self) -> tuple[int, int]:
         return self._sqlite.count_blast_radius_complete()
 
+    def get_last_parse_timestamp(self) -> str | None:
+        return self._sqlite.get_last_parse_timestamp()
+
     # -------------------------------------------------------------------------
     # Bulk operations
     # -------------------------------------------------------------------------

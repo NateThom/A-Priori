@@ -332,10 +332,7 @@ def _cmd_status(args: argparse.Namespace) -> None:
     pending_items = store.get_pending_work_items()
     work_queue_depth = len(pending_items)
 
-    # Last parse timestamp: max updated_at across all concepts
-    conn = store._get_connection()
-    row = conn.execute("SELECT MAX(updated_at) FROM concepts").fetchone()
-    last_parse: str | None = row[0] if row and row[0] else None
+    last_parse: str | None = store.get_last_parse_timestamp()
 
     if use_json:
         print(_json.dumps({
@@ -385,11 +382,14 @@ def _cmd_rebuild_index(args: argparse.Namespace) -> None:
     print(f"  Target database: {db_path.resolve()}")
 
     if no_embed:
-        # Stub embedding service that returns zero vectors
-        from unittest.mock import MagicMock
-        embedding_svc = MagicMock()
-        embedding_svc.generate_embedding.side_effect = lambda text, **kw: [0.0] * 768
-        embedding_svc.generate_embeddings_batch.side_effect = lambda texts, **kw: [[0.0] * 768 for _ in texts]
+        class _NullEmbeddingService:
+            def generate_embedding(self, text: str, **kw: object) -> list[float]:
+                return [0.0] * 768
+
+            def generate_embeddings_batch(self, texts: list[str], **kw: object) -> list[list[float]]:
+                return [[0.0] * 768 for _ in texts]
+
+        embedding_svc: object = _NullEmbeddingService()
     else:
         print("  Loading embedding model…")
         embedding_svc = EmbeddingService()
