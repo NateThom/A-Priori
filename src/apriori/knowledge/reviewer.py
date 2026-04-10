@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel
 
@@ -125,6 +125,8 @@ class ReviewService:
         reviewer: str,
         error_type: str,
         correction_details: Optional[str] = None,
+        description: Optional[str] = None,
+        relationships: Optional[list[dict[str, Any]]] = None,
     ) -> tuple[Concept, ReviewOutcome]:
         """Record a human correction for a concept.
 
@@ -150,7 +152,17 @@ class ReviewService:
         concept = self._require_concept(concept_id)
         now = datetime.now(timezone.utc)
 
-        updated = concept.model_copy(update={"updated_at": now})
+        updated_metadata = dict(concept.metadata or {})
+        if relationships is not None:
+            updated_metadata["relationship_corrections"] = relationships
+
+        update_payload: dict[str, Any] = {"updated_at": now}
+        if description is not None:
+            update_payload["description"] = description
+        if relationships is not None:
+            update_payload["metadata"] = updated_metadata
+
+        updated = concept.model_copy(update=update_payload)
         saved_concept = self._store.update_concept(updated)
 
         outcome = ReviewOutcome(

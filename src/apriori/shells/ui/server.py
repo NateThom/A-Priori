@@ -19,17 +19,21 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from typing import Any
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse
+from pydantic import BaseModel, field_validator
 
 from apriori.config import Config
+from apriori.knowledge.reviewer import ReviewService
+from apriori.models.review_outcome import VALID_ERROR_TYPES
 from apriori.quality.metrics import MetricsEngine
 from apriori.quality.modulation import AdaptiveModulator
 from apriori.shells.ui.models import (
     ActivityItem,
+    CodeReferenceView,
     ConceptDetail,
     ConceptSummary,
     CytoscapeEdge,
@@ -43,6 +47,31 @@ from apriori.shells.ui.models import (
     HealthTargets,
 )
 from apriori.storage.protocol import KnowledgeStore
+
+
+class VerifyRequest(BaseModel):
+    reviewer: str
+
+
+class FlagRequest(BaseModel):
+    reviewer: str
+
+
+class CorrectRequest(BaseModel):
+    reviewer: str
+    error_type: str
+    correction_details: Optional[str] = None
+    description: Optional[str] = None
+    relationships: Optional[list[dict[str, Any]]] = None
+
+    @field_validator("error_type")
+    @classmethod
+    def validate_error_type(cls, value: str) -> str:
+        if value not in VALID_ERROR_TYPES:
+            raise ValueError(
+                f"error_type '{value}' is not valid; must be one of {sorted(VALID_ERROR_TYPES)}"
+            )
+        return value
 
 
 def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
@@ -90,6 +119,32 @@ def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
             confidence=edge.confidence,
         )
 
+    def _read_reference_snippet(file_path: str, line_range: Optional[tuple[int, int]]) -> Optional[str]:
+        path = Path(file_path)
+        if not path.exists() or not path.is_file():
+            return None
+        content = path.read_text(encoding="utf-8")
+        if line_range is None:
+            return content
+        start, end = line_range
+        lines = content.splitlines()
+        if start < 1 or end < start:
+            return None
+        if start > len(lines):
+            return None
+        bounded_end = min(end, len(lines))
+        return "\n".join(lines[start - 1 : bounded_end])
+
+    def _to_code_reference_view(code_ref) -> CodeReferenceView:
+        return CodeReferenceView(
+            symbol=code_ref.symbol,
+            file_path=code_ref.file_path,
+            line_range=code_ref.line_range,
+            semantic_anchor=code_ref.semantic_anchor,
+            is_unresolved=code_ref.is_unresolved,
+            snippet=_read_reference_snippet(code_ref.file_path, code_ref.line_range),
+        )
+
     def _to_concept_detail(concept, edges) -> ConceptDetail:
         return ConceptDetail(
             id=concept.id,
@@ -108,6 +163,7 @@ def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
             created_at=concept.created_at.isoformat(),
             updated_at=concept.updated_at.isoformat(),
             edges=[_to_edge_summary(e) for e in edges],
+            code_references=[_to_code_reference_view(r) for r in concept.code_references],
         )
 
     def _to_activity_item(wi) -> ActivityItem:
@@ -263,6 +319,75 @@ def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
             effective_weights=effective_weights,
             work_queue_depth=stats["pending"],
         )
+
+    @app.get(
+        "/api/review/error-types",
+        summary="List valid correction error types for the review form",
+    )
+    async def list_review_error_types() -> dict[str, list[str]]:
+        return {"error_types": sorted(VALID_ERROR_TYPES)}
+
+    @app.post(
+        "/api/concepts/{concept_id}/verify",
+        summary="Verify a concept from the review workflow",
+    )
+    async def verify_concept(concept_id: uuid.UUID, body: VerifyRequest) -> dict[str, Any]:
+        service = ReviewService(store)
+        try:
+            concept, outcome = await asyncio.to_thread(
+                service.verify_concept, concept_id, body.reviewer
+            )
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"Concept {concept_id} not found")
+
+        return {
+            "message": "Concept verified successfully.",
+            "concept": concept.model_dump(mode="json"),
+            "review_outcome": outcome.model_dump(mode="json"),
+        }
+
+    @app.post(
+        "/api/concepts/{concept_id}/correct",
+        summary="Submit a correction for a concept from the review workflow",
+    )
+    async def correct_concept(concept_id: uuid.UUID, body: CorrectRequest) -> dict[str, Any]:
+        service = ReviewService(store)
+        try:
+            concept, outcome = await asyncio.to_thread(
+                service.correct_concept,
+                concept_id,
+                body.reviewer,
+                body.error_type,
+                body.correction_details,
+                body.description,
+                body.relationships,
+            )
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"Concept {concept_id} not found")
+
+        return {
+            "concept": concept.model_dump(mode="json"),
+            "review_outcome": outcome.model_dump(mode="json"),
+        }
+
+    @app.post(
+        "/api/concepts/{concept_id}/flag",
+        summary="Flag a concept for re-review from the review workflow",
+    )
+    async def flag_concept(concept_id: uuid.UUID, body: FlagRequest) -> dict[str, Any]:
+        service = ReviewService(store)
+        try:
+            concept, outcome, work_item = await asyncio.to_thread(
+                service.flag_concept, concept_id, body.reviewer
+            )
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"Concept {concept_id} not found")
+
+        return {
+            "concept": concept.model_dump(mode="json"),
+            "review_outcome": outcome.model_dump(mode="json"),
+            "work_item": work_item.model_dump(mode="json"),
+        }
 
     # -------------------------------------------------------------------------
     # Static file serving (production: built React app)
