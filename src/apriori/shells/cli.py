@@ -41,7 +41,7 @@ def _cmd_ui(args: argparse.Namespace) -> None:
     sqlite_store = SQLiteStore(db_path)
     if config.storage.enable_dual_write:
         yaml_store = YamlStore(yaml_path)
-        store = DualWriter(primary=sqlite_store, secondary=yaml_store)
+        store = DualWriter(sqlite_store=sqlite_store, yaml_store=yaml_store)
     else:
         store = sqlite_store  # type: ignore[assignment]
 
