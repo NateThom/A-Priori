@@ -30,6 +30,9 @@ from apriori.config import Config
 from apriori.quality.metrics import MetricsEngine
 from apriori.quality.modulation import AdaptiveModulator
 from apriori.shells.ui.models import (
+    ActivityConcept,
+    ActivityEntry,
+    ActivityFailureRecord,
     ActivityItem,
     ConceptDetail,
     ConceptSummary,
@@ -46,6 +49,7 @@ from apriori.shells.ui.models import (
     HealthResponse,
     HealthTargets,
 )
+from apriori.models.work_item import FailureRecord
 from apriori.storage.protocol import KnowledgeStore
 
 
@@ -152,14 +156,51 @@ def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
         return ActivityItem(
             id=wi.id,
             item_type=wi.item_type,
-            concept_id=wi.concept_id,
             description=wi.description,
-            file_path=wi.file_path,
-            created_at=wi.created_at.isoformat(),
-            resolved_at=(wi.resolved_at.isoformat() if wi.resolved_at else None),
-            failure_count=wi.failure_count,
-            escalated=wi.escalated,
-            resolved=wi.resolved,
+        )
+
+    def _to_activity_concept(concept) -> ActivityConcept:
+        return ActivityConcept(id=concept.id, name=concept.name)
+
+    def _normalize_quality_scores(
+        quality_scores: Optional[dict],
+    ) -> Optional[dict[str, float]]:
+        if quality_scores is None:
+            return None
+        normalized: dict[str, float] = {}
+        for key, value in quality_scores.items():
+            if isinstance(value, (int, float)):
+                normalized[key] = float(value)
+        return normalized if normalized else None
+
+    def _select_failure_record_for_activity(
+        records: list[FailureRecord], activity
+    ) -> Optional[FailureRecord]:
+        if not records:
+            return None
+        same_reason = [
+            record
+            for record in records
+            if activity.failure_reason and record.failure_reason == activity.failure_reason
+        ]
+        candidates = same_reason if same_reason else records
+        return min(
+            candidates,
+            key=lambda record: abs(
+                (record.attempted_at - activity.created_at).total_seconds()
+            ),
+        )
+
+    def _to_activity_failure_record(
+        record: FailureRecord,
+    ) -> ActivityFailureRecord:
+        return ActivityFailureRecord(
+            attempted_at=record.attempted_at.isoformat(),
+            model_used=record.model_used,
+            prompt_template=record.prompt_template,
+            failure_reason=record.failure_reason,
+            quality_scores=_normalize_quality_scores(record.quality_scores),
+            reviewer_feedback=record.reviewer_feedback,
         )
 
     def _to_escalated_item_view(wi) -> EscalatedItemView:
@@ -307,15 +348,56 @@ def create_app(store: KnowledgeStore, config: Config) -> FastAPI:
 
     @app.get(
         "/api/activity",
-        response_model=list[ActivityItem],
+        response_model=list[ActivityEntry],
         summary="Recent librarian iterations",
     )
     async def get_activity(
         limit: int = Query(default=20, ge=1, le=100),
-    ) -> list[ActivityItem]:
-        """Return the most recent librarian work items, newest first."""
-        items = await asyncio.to_thread(store.list_work_items, limit)
-        return [_to_activity_item(wi) for wi in items]
+    ) -> list[ActivityEntry]:
+        """Return the most recent librarian iterations, newest first."""
+        activities = await asyncio.to_thread(store.list_librarian_activities)
+        recent_activities = sorted(
+            activities, key=lambda activity: activity.created_at, reverse=True
+        )[:limit]
+
+        entries: list[ActivityEntry] = []
+        for activity in recent_activities:
+            work_item = None
+            concept = None
+            failure_record = None
+            co_regulation_scores = None
+
+            if activity.work_item_id is not None:
+                work_item = await asyncio.to_thread(store.get_work_item, activity.work_item_id)
+                if work_item is not None:
+                    concept = await asyncio.to_thread(store.get_concept, work_item.concept_id)
+                    matched_record = _select_failure_record_for_activity(
+                        work_item.failure_records, activity
+                    )
+                    if matched_record is not None:
+                        failure_record = _to_activity_failure_record(matched_record)
+                        co_regulation_scores = failure_record.quality_scores
+
+            entries.append(
+                ActivityEntry(
+                    id=activity.id,
+                    run_id=activity.run_id,
+                    iteration=activity.iteration,
+                    created_at=activity.created_at.isoformat(),
+                    status=activity.status,
+                    passed=activity.status == "success",
+                    failure_reason=activity.failure_reason,
+                    work_item=_to_activity_item(work_item) if work_item else None,
+                    concept=_to_activity_concept(concept) if concept else None,
+                    co_regulation_scores=co_regulation_scores,
+                    failure_record=failure_record,
+                    concepts_integrated=activity.concepts_integrated,
+                    edges_integrated=activity.edges_integrated,
+                    model_used=activity.model_used,
+                    duration_seconds=activity.duration_seconds,
+                )
+            )
+        return entries
 
     @app.get(
         "/api/health",
