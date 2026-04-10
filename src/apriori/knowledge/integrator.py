@@ -17,6 +17,7 @@ from typing import Callable, Optional
 
 from pydantic import BaseModel
 
+from apriori.maintenance.impact_profiles import recompute_profiles_for_concepts
 from apriori.models.concept import Concept
 from apriori.models.edge import Edge
 from apriori.storage.protocol import KnowledgeStore
@@ -351,16 +352,34 @@ class IntegrationDecisionTree:
         # Check for same-type edge
         same_type = next((e for e in existing_edges if e.edge_type == edge_type), None)
         if same_type is not None:
-            return self._update_edge_confidence(same_type, confidence, git_hash)
+            result = self._update_edge_confidence(same_type, confidence, git_hash)
+            self._refresh_semantic_impact_profiles(evidence_type, source_id, target_id)
+            return result
 
         # Check for contradicting edges (same pair, different type)
         if existing_edges:
-            return self._handle_edge_contradiction(
+            result = self._handle_edge_contradiction(
                 existing_edges, source_id, target_id, edge_type, evidence_type, confidence, git_hash
             )
+            self._refresh_semantic_impact_profiles(evidence_type, source_id, target_id)
+            return result
 
         # No existing edge — create new
-        return self._create_new_edge(source_id, target_id, edge_type, evidence_type, confidence, git_hash)
+        result = self._create_new_edge(
+            source_id, target_id, edge_type, evidence_type, confidence, git_hash
+        )
+        self._refresh_semantic_impact_profiles(evidence_type, source_id, target_id)
+        return result
+
+    def _refresh_semantic_impact_profiles(
+        self,
+        evidence_type: str,
+        source_id: uuid.UUID,
+        target_id: uuid.UUID,
+    ) -> None:
+        if evidence_type != "semantic":
+            return
+        recompute_profiles_for_concepts(self._store, [source_id, target_id])
 
     def _update_edge_confidence(
         self, edge: Edge, new_confidence: float, git_hash: str

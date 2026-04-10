@@ -530,6 +530,7 @@ class TestGetConcept:
         data = response.json()
         assert data["impact_profile"] is not None
         assert len(data["impact_profile"]["structural_impact"]) == 1
+        assert "last_computed" in data["impact_profile"]
 
     def test_includes_code_references_for_click_to_inspect(
         self, client: TestClient, store: _TestStore

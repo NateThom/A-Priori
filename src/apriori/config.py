@@ -120,6 +120,7 @@ class WorkQueueConfig(BaseModel):
     retention_days: int = Field(default=30, ge=1)
     max_backlog_size: int = Field(default=10000, ge=100)
     priority_recalc_interval_hours: int = Field(default=24, ge=1)
+    impact_profile_staleness_hours: int = Field(default=24, ge=1)
 
 
 class EmbeddingConfig(BaseModel):
