@@ -691,3 +691,26 @@ class TestRunTelemetry:
         assert isinstance(telemetry, RunTelemetry)
         assert telemetry.total_iterations == 0
         assert telemetry.total_tokens == 0
+
+    @pytest.mark.asyncio
+    async def test_total_tokens_includes_co_regulation_tokens(
+        self, store: SQLiteStore
+    ):
+        """Given co-regulation is enabled, telemetry.total_tokens includes both
+        analysis and review call tokens (AC-5)."""
+        from apriori.librarian.loop import LibrarianLoop
+
+        concept = _make_concept(store, name="TestConcept")
+        _make_work_item(store, concept)
+
+        # Each LLM call returns 1000 tokens: analysis call + review call = 2000 total
+        config = _make_config(co_regulation_enabled=True)
+        adapter = _make_adapter(
+            [_VALID_ANALYSIS_JSON, _VALID_LEVEL15_JSON],
+            tokens_per_call=1000,
+        )
+        loop = LibrarianLoop(store, adapter, config)
+        records, telemetry = await loop.run(iterations=1)
+
+        assert len(records) == 1
+        assert telemetry.total_tokens == 2000  # analysis (1000) + review (1000)

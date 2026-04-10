@@ -386,7 +386,7 @@ class LibrarianLoop:
         # Step 6: Level 1.5 co-regulation review (AC-4).
         # IMPORTANT: the review call is ALWAYS made when co-regulation is enabled,
         # even if doing so would push past the per-run token budget (arch:quality-invariant).
-        assessment = await check_level15(
+        assessment, coreg_tokens = await check_level15(
             librarian_output=level1_result.adjusted_output,
             code_snippet=code_content,
             structural_context=structural_context,
@@ -394,8 +394,7 @@ class LibrarianLoop:
             config=self._config.quality.co_regulation,
         )
         # co-regulation tokens are charged regardless of outcome (AC-4)
-        if hasattr(assessment, "_tokens_used"):
-            tokens_used += assessment._tokens_used  # noqa: SLF001
+        tokens_used += coreg_tokens
 
         if not assessment.composite_pass:
             failure_record = failure_record_from_level15(
