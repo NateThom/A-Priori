@@ -306,6 +306,36 @@ def test_search_returns_results_from_populated_store(tmp_path: Path, monkeypatch
     assert "main" in captured.out.lower(), f"Expected 'main' in search output: {captured.out}"
 
 
+def test_init_and_search_use_repo_relative_concept_names(tmp_path: Path, monkeypatch, capsys):
+    """Given apriori init on a repo, concept names are repo-relative and search
+    matches by partial name."""
+    from apriori.shells import cli
+    from apriori.storage.sqlite_store import SQLiteStore
+
+    _write_py_file(
+        tmp_path / "packages" / "cli" / "src" / "lib" / "orchestrator.py",
+        "class PipelineOrchestrator:\n    pass\n",
+    )
+
+    with patch("apriori.embedding.service.EmbeddingService", return_value=_make_fake_embedding_service()):
+        args = _make_namespace(repo=str(tmp_path), no_embed=True)
+        monkeypatch.chdir(tmp_path)
+        cli._cmd_init(args)
+        capsys.readouterr()
+
+        search_args = argparse.Namespace(query="orchestrator", limit=10, db=None, json=False)
+        cli._cmd_search(search_args)
+
+    output = capsys.readouterr().out
+    assert "packages/cli/src/lib/orchestrator.py::PipelineOrchestrator" in output
+    assert str(tmp_path) not in output
+
+    store = SQLiteStore(tmp_path / ".apriori" / "graph.db")
+    names = {c.name for c in store.list_concepts()}
+    assert "packages/cli/src/lib/orchestrator.py::PipelineOrchestrator" in names
+    assert not any(name.startswith(str(tmp_path)) for name in names)
+
+
 def test_search_no_results_prints_message(tmp_path: Path, monkeypatch, capsys):
     """Given a store with concepts, when searching for a term that matches nothing,
     then a 'no results' message is printed."""

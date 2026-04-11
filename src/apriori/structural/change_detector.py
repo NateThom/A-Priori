@@ -55,10 +55,20 @@ class ChangeDetectionResult(BaseModel):
 _STATE_KEY = "last_analyzed_commit"
 
 
-def _symbols_from_result(result: ParseResult) -> set[str]:
+def _concept_path(file_path: Path, repo_root: Path | None = None) -> Path:
+    """Return path used for concept naming (repo-relative when possible)."""
+    if repo_root is None:
+        return file_path
+    try:
+        return file_path.resolve().relative_to(repo_root.resolve())
+    except ValueError:
+        return file_path
+
+
+def _symbols_from_result(result: ParseResult, repo_root: Path | None = None) -> set[str]:
     """Return the set of FQNs that the GraphBuilder would create for *result*."""
-    fqns: set[str] = {module_fqn(result.file_path)}
-    fp = result.file_path
+    fp = _concept_path(result.file_path, repo_root)
+    fqns: set[str] = {module_fqn(fp)}
     for func in result.functions:
         fqns.add(symbol_fqn(fp, func.name))
     for cls in result.classes:
@@ -143,7 +153,7 @@ class ChangeDetector:
             if result is None:
                 continue
             files_analyzed.append(str(file_path))
-            builder = GraphBuilder(self._store, git_head=head_commit)
+            builder = GraphBuilder(self._store, git_head=head_commit, repo_root=self._repo_root)
             builder.build([result])
             wi = self._create_investigate_file_item(file_path, result)
             if wi is not None:
@@ -252,7 +262,7 @@ class ChangeDetector:
         """Create a file-level concept and an investigate_file work item for it."""
         # Create a file-level concept to anchor the work item
         file_concept = Concept(
-            name=str(file_path),
+            name=str(_concept_path(file_path, self._repo_root)),
             description=f"New file — needs investigation: {file_path.name}",
             created_by="agent",
             confidence=1.0,
@@ -290,10 +300,10 @@ class ChangeDetector:
         )
 
         # Step 2: compute expected new FQNs from the parse result
-        new_fqns = _symbols_from_result(result)
+        new_fqns = _symbols_from_result(result, repo_root=self._repo_root)
 
         # Step 3: run GraphBuilder to update concepts/edges in the store
-        builder = GraphBuilder(self._store, git_head=head_commit)
+        builder = GraphBuilder(self._store, git_head=head_commit, repo_root=self._repo_root)
         builder.build([result])
 
         # Step 4: detect modified and deleted symbols
