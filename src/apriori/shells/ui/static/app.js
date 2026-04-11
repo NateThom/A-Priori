@@ -19,6 +19,31 @@
     return response.json()
   }
 
+  function isUuid(value) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+  }
+
+  function readInitialCenterFromUrl() {
+    const params = new URLSearchParams(window.location.search)
+    const centerParam = params.get("center")
+    return centerParam && isUuid(centerParam) ? centerParam : ""
+  }
+
+  function pushCenterToUrl(centerId) {
+    const url = new URL(window.location.href)
+    const params = new URLSearchParams(url.search)
+    if (!centerId || !isUuid(centerId)) {
+      return
+    }
+    if (params.get("center") === centerId) {
+      return
+    }
+    params.set("center", centerId)
+    const search = params.toString()
+    const nextUrl = `${url.pathname}${search ? `?${search}` : ""}${url.hash}`
+    window.history.pushState({}, "", nextUrl)
+  }
+
   function Header({ activeView, setActiveView }) {
     const tabs = [
       ["graph", "Graph Visualization"],
@@ -77,17 +102,28 @@
     const [error, setError] = useState("")
     const cyRef = useRef(null)
     const containerRef = useRef(null)
+    const initialCenterFromUrl = useMemo(() => readInitialCenterFromUrl(), [])
 
     useEffect(() => {
       fetchJson("/api/concepts")
         .then((rows) => {
           setConcepts(rows)
-          if (rows.length > 0) {
-            setCenterId(String(rows[0].id))
+          if (rows.length === 0) {
+            return
           }
+          if (initialCenterFromUrl && rows.some((concept) => String(concept.id) === initialCenterFromUrl)) {
+            setCenterId(initialCenterFromUrl)
+            return
+          }
+          setCenterId(String(rows[0].id))
         })
         .catch((err) => setError(err.message))
-    }, [])
+    }, [initialCenterFromUrl])
+
+    function handleCenterChange(nextCenterId) {
+      setCenterId(nextCenterId)
+      pushCenterToUrl(nextCenterId)
+    }
 
     const allLabels = useMemo(() => {
       const labels = new Set()
@@ -223,7 +259,7 @@
           "Center concept",
           h(
             "select",
-            { value: centerId, onChange: (event) => setCenterId(event.target.value) },
+            { value: centerId, onChange: (event) => handleCenterChange(event.target.value) },
             concepts.map((concept) =>
               h("option", { key: concept.id, value: String(concept.id) }, concept.name)
             )

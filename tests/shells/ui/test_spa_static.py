@@ -80,3 +80,23 @@ def test_health_dashboard_uses_current_api_payload_keys() -> None:
     assert "health.targets.freshness_target" in source
     assert "health.targets.blast_radius_target" in source
     assert "health.effective_weights" in source
+
+
+def test_graph_center_can_bootstrap_from_center_query_param() -> None:
+    """AC-1/AC-2: Graph view reads ?center= on load with UUID validation and fallback."""
+    source = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "window.location.search" in source
+    assert "new URLSearchParams(window.location.search)" in source
+    assert "isUuid(centerParam)" in source
+    assert "rows.some((concept) => String(concept.id) === initialCenterFromUrl)" in source
+    assert "setCenterId(String(rows[0].id))" in source
+
+
+def test_graph_center_selection_updates_url_with_pushstate() -> None:
+    """AC-3: Changing center concept updates browser URL with ?center=<uuid>."""
+    source = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "window.history.pushState" in source
+    assert 'params.set("center", centerId)' in source
+    assert "onChange: (event) => handleCenterChange(event.target.value)" in source
