@@ -441,3 +441,63 @@ def test_interface_file_path_embedded(tmp_path: Path) -> None:
     result = TypeScriptParser().parse(source, file_path)
 
     assert result.interfaces[0].file_path == file_path
+
+
+# ---------------------------------------------------------------------------
+# Story 14.3: Expanded structural relationship extraction
+# ---------------------------------------------------------------------------
+
+
+def test_calls_relationships_extracted_for_call_and_new(tmp_path: Path) -> None:
+    """Story 14.3: call_expression and new_expression produce calls relationships."""
+    source = (
+        b"class Service {}\n"
+        b"function helper(): void {}\n"
+        b"function run(): void { helper(); new Service(); }\n"
+    )
+    file_path = tmp_path / "calls.ts"
+    result = TypeScriptParser().parse(source, file_path)
+
+    calls = [r for r in result.relationships if r.kind == "calls" and r.source == "run"]
+    targets = {r.target for r in calls}
+    assert "helper" in targets
+    assert "Service" in targets
+
+
+def test_inherits_relationships_include_implements_and_interface_extends(tmp_path: Path) -> None:
+    """Story 14.3: class implements + interface extends emit inherits relationships."""
+    source = (
+        b"interface Base {}\n"
+        b"interface Extra {}\n"
+        b"interface Derived extends Base, Extra {}\n"
+        b"class Impl implements Derived {}\n"
+    )
+    file_path = tmp_path / "inherits.ts"
+    result = TypeScriptParser().parse(source, file_path)
+
+    inherits = [r for r in result.relationships if r.kind == "inherits"]
+    pairs = {(r.source, r.target) for r in inherits}
+    assert ("Derived", "Base") in pairs
+    assert ("Derived", "Extra") in pairs
+    assert ("Impl", "Derived") in pairs
+
+
+def test_type_references_relationships_extracted_from_signatures_and_generics(
+    tmp_path: Path,
+) -> None:
+    """Story 14.3: type annotations, return types, and generics emit type-references."""
+    source = (
+        b"type UserId = string;\n"
+        b"interface Repo<T> {}\n"
+        b"interface User {}\n"
+        b"function load(repo: Repo<User>, id: UserId): Promise<User> { throw new Error('x'); }\n"
+    )
+    file_path = tmp_path / "types.ts"
+    result = TypeScriptParser().parse(source, file_path)
+
+    refs = [r for r in result.relationships if r.kind == "type-references" and r.source == "load"]
+    targets = {r.target for r in refs}
+    assert "Repo" in targets
+    assert "User" in targets
+    assert "UserId" in targets
+    assert "Promise" in targets
