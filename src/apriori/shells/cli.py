@@ -535,9 +535,10 @@ def _cmd_ui(args: argparse.Namespace) -> None:
     from apriori.storage.sqlite_store import SQLiteStore
     from apriori.storage.yaml_store import YamlStore
 
-    config = load_config()
+    apriori_config = Path.cwd() / ".apriori" / "apriori.config.yaml"
+    config = load_config(apriori_config if apriori_config.exists() else None)
 
-    db_path = Path(args.db) if args.db else Path(config.storage.sqlite_path)
+    db_path = _resolve_db_path(args)
     yaml_path = Path(config.storage.yaml_backup_path)
 
     sqlite_store = SQLiteStore(db_path)
