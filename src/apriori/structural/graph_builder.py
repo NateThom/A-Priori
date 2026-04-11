@@ -46,6 +46,11 @@ def _function_metadata(func: FunctionEntity) -> dict:
     }
 
 
+def _with_language(metadata: dict, language: str) -> dict:
+    """Return metadata augmented with language provenance."""
+    return {"language": language, **metadata}
+
+
 # ---------------------------------------------------------------------------
 # Result model
 # ---------------------------------------------------------------------------
@@ -158,7 +163,7 @@ class GraphBuilder:
             fqn = symbol_fqn(result.file_path, func.name)
             concept, created = self._upsert_concept(
                 fqn, result, func.start_line, func.end_line, "function",
-                _function_metadata(func), existing,
+                _with_language(_function_metadata(func), result.language), existing,
             )
             existing[fqn] = concept
             if created:
@@ -168,7 +173,10 @@ class GraphBuilder:
 
         for cls in result.classes:
             fqn = symbol_fqn(result.file_path, cls.name)
-            metadata = {"bases": cls.bases, "is_exported": cls.is_exported}
+            metadata = _with_language(
+                {"bases": cls.bases, "is_exported": cls.is_exported},
+                result.language,
+            )
             concept, created = self._upsert_concept(
                 fqn, result, cls.start_line, cls.end_line, "class", metadata, existing,
             )
@@ -183,7 +191,7 @@ class GraphBuilder:
                 method_fqn = symbol_fqn(result.file_path, cls.name, method.name)
                 m_concept, m_created = self._upsert_concept(
                     method_fqn, result, method.start_line, method.end_line, "method",
-                    _function_metadata(method), existing,
+                    _with_language(_function_metadata(method), result.language), existing,
                 )
                 existing[method_fqn] = m_concept
                 if m_created:
@@ -193,7 +201,7 @@ class GraphBuilder:
 
         for iface in result.interfaces:
             fqn = symbol_fqn(result.file_path, iface.name)
-            metadata = {"is_exported": iface.is_exported}
+            metadata = _with_language({"is_exported": iface.is_exported}, result.language)
             concept, created = self._upsert_concept(
                 fqn, result, iface.start_line, iface.end_line, "interface", metadata, existing,
             )
@@ -304,7 +312,7 @@ class GraphBuilder:
                 stats.edges_created += 1
                 continue
 
-            if rel.kind not in ("calls", "inherits"):
+            if rel.kind not in ("calls", "inherits", "type-references"):
                 continue
             if not rel.source:
                 # Calls with no known source (attribute-call form) are not useful.

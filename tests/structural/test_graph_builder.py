@@ -208,6 +208,31 @@ class TestAC2CallsEdge:
         edges = store.list_edges(edge_type="inherits")
         assert len(edges) == 1
 
+    def test_type_references_edge_created_from_relationship(
+        self, store: SQLiteStore, builder: GraphBuilder, tmp_path: Path
+    ) -> None:
+        """A type-references relationship between local symbols produces an edge."""
+        fp = tmp_path / "types.ts"
+        source = b"interface User {}\nfunction load(u: User): User { return u }\n"
+        iface = InterfaceEntity(name="User", start_line=1, end_line=1, file_path=fp)
+        load = _func("load", fp, start=2, end=2)
+        rel = Relationship(kind="type-references", source="load", target="User", file_path=fp, line=2)
+
+        builder.build([_make_result(
+            fp,
+            functions=[load],
+            interfaces=[iface],
+            relationships=[rel],
+            source=source,
+            language="typescript",
+        )])
+
+        edges = store.list_edges(edge_type="type-references")
+        assert len(edges) == 1
+        edge = edges[0]
+        assert edge.evidence_type == "structural"
+        assert edge.confidence == 1.0
+
     def test_edges_skipped_when_source_not_in_store(
         self, store: SQLiteStore, builder: GraphBuilder, tmp_path: Path
     ) -> None:
@@ -601,6 +626,29 @@ class TestAC7Metadata:
         concept = _concept_by_name(store, str(fp) + "::f")
         param_entry = concept.metadata["params"][0]
         assert param_entry["type_annotation"] == "int"
+
+    def test_typescript_entity_metadata_includes_language(
+        self, store: SQLiteStore, builder: GraphBuilder, tmp_path: Path
+    ) -> None:
+        """TypeScript entities include language='typescript' in metadata."""
+        fp = tmp_path / "mod.ts"
+        source = b"interface User {}\nfunction load(): User { throw new Error('x'); }\n"
+        func = _func("load", fp, start=2, end=2)
+        iface = InterfaceEntity(name="User", start_line=1, end_line=1, file_path=fp)
+
+        builder.build([
+            _make_result(
+                fp,
+                functions=[func],
+                interfaces=[iface],
+                source=source,
+                language="typescript",
+            )
+        ])
+
+        for concept_name in (str(fp), str(fp) + "::load", str(fp) + "::User"):
+            concept = _concept_by_name(store, concept_name)
+            assert concept.metadata["language"] == "typescript"
 
 
 # ---------------------------------------------------------------------------

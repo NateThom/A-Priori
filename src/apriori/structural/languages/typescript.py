@@ -10,6 +10,7 @@ All operations are synchronous (arch:sync-first).
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import tree_sitter_typescript as _tstypescript
@@ -23,6 +24,7 @@ from apriori.structural.models import (
     InterfaceEntity,
     ParseResult,
     ReExport,
+    Relationship,
 )
 
 # ---------------------------------------------------------------------------
@@ -93,6 +95,54 @@ def _strip_quotes(raw: str) -> str:
     return raw.strip("\"'`")
 
 
+_TS_TYPE_STOPWORDS = frozenset(
+    {
+        "string",
+        "number",
+        "boolean",
+        "void",
+        "unknown",
+        "any",
+        "never",
+        "undefined",
+        "null",
+        "true",
+        "false",
+        "readonly",
+        "keyof",
+        "typeof",
+        "infer",
+        "extends",
+        "implements",
+        "class",
+        "interface",
+        "function",
+        "new",
+        "import",
+        "export",
+        "from",
+        "const",
+        "let",
+        "var",
+        "type",
+        "as",
+    }
+)
+
+
+def _extract_type_names(raw_type: str | None) -> list[str]:
+    """Extract candidate type identifiers from a type string."""
+    if not raw_type:
+        return []
+
+    names: list[str] = []
+    for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", raw_type):
+        if token in _TS_TYPE_STOPWORDS:
+            continue
+        names.append(token)
+    return names
+
+
 def _collect_errors(node) -> list[str]:
     """Walk the AST and collect all ERROR / MISSING nodes."""
     errors: list[str] = []
@@ -150,10 +200,11 @@ class TypeScriptParser:
         interfaces: list[InterfaceEntity] = []
         imports: list[ImportRelationship] = []
         re_exports: list[ReExport] = []
+        relationships: list[Relationship] = []
 
         for node in tree.root_node.children:
             self._extract_top_level(
-                node, file_path, functions, classes, interfaces, imports, re_exports
+                node, file_path, functions, classes, interfaces, imports, re_exports, relationships
             )
 
         return ParseResult(
@@ -168,6 +219,7 @@ class TypeScriptParser:
             interfaces=interfaces,
             imports=imports,
             re_exports=re_exports,
+            relationships=relationships,
         )
 
     # ------------------------------------------------------------------
@@ -183,6 +235,7 @@ class TypeScriptParser:
         interfaces: list[InterfaceEntity],
         imports: list[ImportRelationship],
         re_exports: list[ReExport],
+        relationships: list[Relationship],
     ) -> None:
         ntype = node.type
 
@@ -190,24 +243,31 @@ class TypeScriptParser:
             func = self._extract_function_decl(node, file_path, is_exported=False)
             if func:
                 functions.append(func)
+                self._collect_function_relationships(node, func, func.name, file_path, relationships)
 
         elif ntype == "class_declaration":
-            cls = self._extract_class_decl(node, file_path, is_exported=False)
+            cls = self._extract_class_decl(
+                node, file_path, is_exported=False, relationships=relationships
+            )
             if cls:
                 classes.append(cls)
 
         elif ntype == "interface_declaration":
-            iface = self._extract_interface_decl(node, file_path, is_exported=False)
+            iface = self._extract_interface_decl(
+                node, file_path, is_exported=False, relationships=relationships
+            )
             if iface:
                 interfaces.append(iface)
 
         elif ntype in ("lexical_declaration", "variable_declaration"):
-            for func in self._extract_arrow_funcs(node, file_path, is_exported=False):
+            for func in self._extract_arrow_funcs(
+                node, file_path, is_exported=False, relationships=relationships
+            ):
                 functions.append(func)
 
         elif ntype == "export_statement":
             self._extract_export_stmt(
-                node, file_path, functions, classes, interfaces, re_exports
+                node, file_path, functions, classes, interfaces, re_exports, relationships
             )
 
         elif ntype == "import_statement":
@@ -238,14 +298,37 @@ class TypeScriptParser:
         )
 
     def _extract_class_decl(
-        self, node, file_path: Path, is_exported: bool
+        self,
+        node,
+        file_path: Path,
+        is_exported: bool,
+        relationships: list[Relationship] | None = None,
     ) -> ClassEntity | None:
         name_node = node.child_by_field_name("name")
         if name_node is None:
             return None
+        class_name = _text(name_node)
+        methods = self._extract_class_methods(node, file_path)
+
+        if relationships is not None:
+            self._collect_inherits_relationships(node, class_name, file_path, relationships)
+            for method in methods:
+                method_node = self._find_method_definition_node(node, method.name)
+                if method_node is None:
+                    continue
+                source_name = f"{class_name}::{method.name}"
+                self._collect_function_relationships(
+                    method_node,
+                    method,
+                    source_name,
+                    file_path,
+                    relationships,
+                )
+
         return ClassEntity(
-            name=_text(name_node),
+            name=class_name,
             bases=self._extract_bases(node),
+            methods=methods,
             start_line=node.start_point[0] + 1,
             end_line=node.end_point[0] + 1,
             file_path=file_path,
@@ -253,13 +336,22 @@ class TypeScriptParser:
         )
 
     def _extract_interface_decl(
-        self, node, file_path: Path, is_exported: bool
+        self,
+        node,
+        file_path: Path,
+        is_exported: bool,
+        relationships: list[Relationship] | None = None,
     ) -> InterfaceEntity | None:
         name_node = node.child_by_field_name("name")
         if name_node is None:
             return None
+        interface_name = _text(name_node)
+        if relationships is not None:
+            self._collect_interface_inherits_relationships(
+                node, interface_name, file_path, relationships
+            )
         return InterfaceEntity(
-            name=_text(name_node),
+            name=interface_name,
             start_line=node.start_point[0] + 1,
             end_line=node.end_point[0] + 1,
             file_path=file_path,
@@ -267,7 +359,11 @@ class TypeScriptParser:
         )
 
     def _extract_arrow_funcs(
-        self, decl_node, file_path: Path, is_exported: bool
+        self,
+        decl_node,
+        file_path: Path,
+        is_exported: bool,
+        relationships: list[Relationship] | None = None,
     ) -> list[FunctionEntity]:
         """Extract arrow functions from a lexical/variable_declaration node."""
         results: list[FunctionEntity] = []
@@ -280,21 +376,28 @@ class TypeScriptParser:
                 continue
             if value_node.type != "arrow_function":
                 continue
-            results.append(
-                FunctionEntity(
-                    name=_text(name_node),
-                    params=self._extract_params(
-                        value_node.child_by_field_name("parameters")
-                    ),
-                    return_type=self._extract_return_type(
-                        value_node.child_by_field_name("return_type")
-                    ),
-                    start_line=decl_node.start_point[0] + 1,
-                    end_line=decl_node.end_point[0] + 1,
-                    file_path=file_path,
-                    is_exported=is_exported,
-                )
+            func = FunctionEntity(
+                name=_text(name_node),
+                params=self._extract_params(
+                    value_node.child_by_field_name("parameters")
+                ),
+                return_type=self._extract_return_type(
+                    value_node.child_by_field_name("return_type")
+                ),
+                start_line=decl_node.start_point[0] + 1,
+                end_line=decl_node.end_point[0] + 1,
+                file_path=file_path,
+                is_exported=is_exported,
             )
+            if relationships is not None:
+                self._collect_function_relationships(
+                    value_node,
+                    func,
+                    func.name,
+                    file_path,
+                    relationships,
+                )
+            results.append(func)
         return results
 
     # ------------------------------------------------------------------
@@ -309,6 +412,7 @@ class TypeScriptParser:
         classes: list[ClassEntity],
         interfaces: list[InterfaceEntity],
         re_exports: list[ReExport],
+        relationships: list[Relationship],
     ) -> None:
         # Case 1: export declaration (export function/class/interface/const)
         decl = node.child_by_field_name("declaration")
@@ -318,16 +422,38 @@ class TypeScriptParser:
                 func = self._extract_function_decl(decl, file_path, is_exported=True)
                 if func:
                     functions.append(func)
+                    self._collect_function_relationships(
+                        decl,
+                        func,
+                        func.name,
+                        file_path,
+                        relationships,
+                    )
             elif ntype == "class_declaration":
-                cls = self._extract_class_decl(decl, file_path, is_exported=True)
+                cls = self._extract_class_decl(
+                    decl,
+                    file_path,
+                    is_exported=True,
+                    relationships=relationships,
+                )
                 if cls:
                     classes.append(cls)
             elif ntype == "interface_declaration":
-                iface = self._extract_interface_decl(decl, file_path, is_exported=True)
+                iface = self._extract_interface_decl(
+                    decl,
+                    file_path,
+                    is_exported=True,
+                    relationships=relationships,
+                )
                 if iface:
                     interfaces.append(iface)
             elif ntype in ("lexical_declaration", "variable_declaration"):
-                for func in self._extract_arrow_funcs(decl, file_path, is_exported=True):
+                for func in self._extract_arrow_funcs(
+                    decl,
+                    file_path,
+                    is_exported=True,
+                    relationships=relationships,
+                ):
                     functions.append(func)
             return
 
@@ -458,3 +584,196 @@ class TypeScriptParser:
                 if name_node is not None:
                     names.append(_text(name_node))
         return names
+
+    def _extract_class_methods(self, class_node, file_path: Path) -> list[FunctionEntity]:
+        methods: list[FunctionEntity] = []
+        body = class_node.child_by_field_name("body")
+        if body is None:
+            return methods
+        for child in body.children:
+            if child.type != "method_definition":
+                continue
+            name_node = child.child_by_field_name("name")
+            if name_node is None:
+                continue
+            methods.append(
+                FunctionEntity(
+                    name=_text(name_node),
+                    params=self._extract_params(child.child_by_field_name("parameters")),
+                    return_type=self._extract_return_type(
+                        child.child_by_field_name("return_type")
+                    ),
+                    start_line=child.start_point[0] + 1,
+                    end_line=child.end_point[0] + 1,
+                    file_path=file_path,
+                    is_exported=False,
+                    is_async=any(grand.type == "async" for grand in child.children),
+                )
+            )
+        return methods
+
+    def _find_method_definition_node(self, class_node, method_name: str):
+        body = class_node.child_by_field_name("body")
+        if body is None:
+            return None
+        for child in body.children:
+            if child.type != "method_definition":
+                continue
+            name_node = child.child_by_field_name("name")
+            if name_node is not None and _text(name_node) == method_name:
+                return child
+        return None
+
+    def _collect_function_relationships(
+        self,
+        function_node,
+        func: FunctionEntity,
+        source_name: str,
+        file_path: Path,
+        relationships: list[Relationship],
+    ) -> None:
+        self._collect_call_relationships(function_node, source_name, file_path, relationships)
+        self._collect_type_reference_relationships(
+            source_name, func.params, func.return_type, function_node, file_path, relationships
+        )
+
+    def _collect_call_relationships(
+        self,
+        node,
+        source_name: str,
+        file_path: Path,
+        relationships: list[Relationship],
+    ) -> None:
+        if node.type in ("call_expression", "new_expression"):
+            target_name = self._extract_invocation_target(node)
+            if target_name:
+                relationships.append(
+                    Relationship(
+                        kind="calls",
+                        source=source_name,
+                        target=target_name,
+                        file_path=file_path,
+                        line=node.start_point[0] + 1,
+                    )
+                )
+        for child in node.children:
+            self._collect_call_relationships(child, source_name, file_path, relationships)
+
+    def _collect_inherits_relationships(
+        self,
+        class_node,
+        class_name: str,
+        file_path: Path,
+        relationships: list[Relationship],
+    ) -> None:
+        heritage = next((c for c in class_node.children if c.type == "class_heritage"), None)
+        if heritage is None:
+            return
+
+        for child in heritage.children:
+            if child.type not in ("extends_clause", "implements_clause"):
+                continue
+            for type_name in _extract_type_names(_text(child)):
+                relationships.append(
+                    Relationship(
+                        kind="inherits",
+                        source=class_name,
+                        target=type_name,
+                        file_path=file_path,
+                        line=child.start_point[0] + 1,
+                    )
+                )
+
+    def _collect_interface_inherits_relationships(
+        self,
+        interface_node,
+        interface_name: str,
+        file_path: Path,
+        relationships: list[Relationship],
+    ) -> None:
+        extends_clause = next(
+            (c for c in interface_node.children if c.type == "extends_type_clause"),
+            None,
+        )
+        if extends_clause is None:
+            return
+        for type_name in _extract_type_names(_text(extends_clause)):
+            relationships.append(
+                Relationship(
+                    kind="inherits",
+                    source=interface_name,
+                    target=type_name,
+                    file_path=file_path,
+                    line=extends_clause.start_point[0] + 1,
+                )
+            )
+
+    def _collect_type_reference_relationships(
+        self,
+        source_name: str,
+        params: list[FunctionParam],
+        return_type: str | None,
+        function_node,
+        file_path: Path,
+        relationships: list[Relationship],
+    ) -> None:
+        for param in params:
+            for type_name in _extract_type_names(param.type_annotation):
+                relationships.append(
+                    Relationship(
+                        kind="type-references",
+                        source=source_name,
+                        target=type_name,
+                        file_path=file_path,
+                        line=function_node.start_point[0] + 1,
+                    )
+                )
+        for type_name in _extract_type_names(return_type):
+            relationships.append(
+                Relationship(
+                    kind="type-references",
+                    source=source_name,
+                    target=type_name,
+                    file_path=file_path,
+                    line=function_node.start_point[0] + 1,
+                )
+            )
+        type_params = function_node.child_by_field_name("type_parameters")
+        if type_params is not None:
+            for type_name in _extract_type_names(_text(type_params)):
+                relationships.append(
+                    Relationship(
+                        kind="type-references",
+                        source=source_name,
+                        target=type_name,
+                        file_path=file_path,
+                        line=type_params.start_point[0] + 1,
+                    )
+                )
+
+    def _extract_invocation_target(self, invocation_node) -> str | None:
+        target_node = (
+            invocation_node.child_by_field_name("function")
+            or invocation_node.child_by_field_name("constructor")
+            or invocation_node.child_by_field_name("callee")
+        )
+        if target_node is None and invocation_node.named_children:
+            target_node = invocation_node.named_children[0]
+        if target_node is None:
+            return None
+
+        if target_node.type in ("identifier", "property_identifier", "type_identifier"):
+            return _text(target_node)
+
+        property_node = target_node.child_by_field_name("property")
+        if property_node is not None:
+            return _text(property_node)
+
+        for child in reversed(target_node.named_children):
+            if child.type in ("identifier", "property_identifier", "type_identifier"):
+                return _text(child)
+
+        candidates = _extract_type_names(_text(target_node))
+        if candidates:
+            return candidates[-1]
+        return None
