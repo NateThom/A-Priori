@@ -81,9 +81,11 @@ class GraphBuilder:
         self,
         store: KnowledgeStore,
         git_head: Optional[str] = None,
+        repo_root: Optional[Path] = None,
     ) -> None:
         self._store = store
         self._git_head = git_head
+        self._repo_root = repo_root.resolve() if repo_root is not None else None
 
     # -----------------------------------------------------------------------
     # Public API
@@ -136,11 +138,13 @@ class GraphBuilder:
         existing: dict[str, Concept],
         stats: GraphBuildResult,
     ) -> None:
-        module_name = module_fqn(result.file_path)
+        concept_file_path = self._concept_path(result.file_path)
+        module_name = module_fqn(concept_file_path)
         module_end_line = max(1, len(result.source.splitlines()))
         module_metadata = {"language": result.language}
         module_concept, module_created = self._upsert_concept(
             module_name,
+            concept_file_path,
             result,
             1,
             module_end_line,
@@ -155,9 +159,9 @@ class GraphBuilder:
             stats.concepts_updated += 1
 
         for func in result.functions:
-            fqn = symbol_fqn(result.file_path, func.name)
+            fqn = symbol_fqn(concept_file_path, func.name)
             concept, created = self._upsert_concept(
-                fqn, result, func.start_line, func.end_line, "function",
+                fqn, concept_file_path, result, func.start_line, func.end_line, "function",
                 _function_metadata(func), existing,
             )
             existing[fqn] = concept
@@ -167,10 +171,10 @@ class GraphBuilder:
                 stats.concepts_updated += 1
 
         for cls in result.classes:
-            fqn = symbol_fqn(result.file_path, cls.name)
+            fqn = symbol_fqn(concept_file_path, cls.name)
             metadata = {"bases": cls.bases, "is_exported": cls.is_exported}
             concept, created = self._upsert_concept(
-                fqn, result, cls.start_line, cls.end_line, "class", metadata, existing,
+                fqn, concept_file_path, result, cls.start_line, cls.end_line, "class", metadata, existing,
             )
             existing[fqn] = concept
             if created:
@@ -180,9 +184,9 @@ class GraphBuilder:
 
             # Methods nested in the class become their own concept nodes.
             for method in cls.methods:
-                method_fqn = symbol_fqn(result.file_path, cls.name, method.name)
+                method_fqn = symbol_fqn(concept_file_path, cls.name, method.name)
                 m_concept, m_created = self._upsert_concept(
-                    method_fqn, result, method.start_line, method.end_line, "method",
+                    method_fqn, concept_file_path, result, method.start_line, method.end_line, "method",
                     _function_metadata(method), existing,
                 )
                 existing[method_fqn] = m_concept
@@ -192,10 +196,10 @@ class GraphBuilder:
                     stats.concepts_updated += 1
 
         for iface in result.interfaces:
-            fqn = symbol_fqn(result.file_path, iface.name)
+            fqn = symbol_fqn(concept_file_path, iface.name)
             metadata = {"is_exported": iface.is_exported}
             concept, created = self._upsert_concept(
-                fqn, result, iface.start_line, iface.end_line, "interface", metadata, existing,
+                fqn, concept_file_path, result, iface.start_line, iface.end_line, "interface", metadata, existing,
             )
             existing[fqn] = concept
             if created:
@@ -206,6 +210,7 @@ class GraphBuilder:
     def _upsert_concept(
         self,
         fqn: str,
+        concept_file_path: Path,
         result: ParseResult,
         start_line: int,
         end_line: int,
@@ -223,7 +228,7 @@ class GraphBuilder:
         content_hash_val = _content_hash(result.source, start_line, end_line)
         semantic_anchor = (
             f"{result.language} {entity_type} '{simple_name}' "
-            f"at {result.file_path}:{start_line}-{end_line}"
+            f"at {concept_file_path}:{start_line}-{end_line}"
         )
         code_ref = CodeReference(
             symbol=fqn,
@@ -247,7 +252,7 @@ class GraphBuilder:
             return updated, False
 
         description = (
-            f"{result.language} {entity_type} '{simple_name}' in {result.file_path}"
+            f"{result.language} {entity_type} '{simple_name}' in {concept_file_path}"
         )
         concept = Concept(
             name=fqn,
@@ -273,7 +278,8 @@ class GraphBuilder:
         existing_edge_keys: set[tuple[uuid.UUID, uuid.UUID, str]],
         stats: GraphBuildResult,
     ) -> None:
-        module_concept = existing.get(module_fqn(result.file_path))
+        concept_file_path = self._concept_path(result.file_path)
+        module_concept = existing.get(module_fqn(concept_file_path))
         if module_concept is not None:
             self._remove_existing_import_edges_for_module(
                 module_concept.id, existing_edge_keys
@@ -286,7 +292,7 @@ class GraphBuilder:
                     stats.edges_skipped += 1
                     continue
                 target_concept = self._resolve_import_target(
-                    rel.target, rel.file_path, existing, simple_to_fqns
+                    rel.target, self._concept_path(rel.file_path), existing, simple_to_fqns
                 )
                 if target_concept is None:
                     stats.edges_skipped += 1
@@ -311,8 +317,9 @@ class GraphBuilder:
                 stats.edges_skipped += 1
                 continue
 
-            source_fqn = symbol_fqn(rel.file_path, rel.source)
-            target_fqn = symbol_fqn(rel.file_path, rel.target)
+            rel_file_path = self._concept_path(rel.file_path)
+            source_fqn = symbol_fqn(rel_file_path, rel.source)
+            target_fqn = symbol_fqn(rel_file_path, rel.target)
 
             source_concept = existing.get(source_fqn)
             target_concept = existing.get(target_fqn)
@@ -338,7 +345,7 @@ class GraphBuilder:
                 targets = imp.names if imp.names else [imp.source_module]
                 for target_name in targets:
                     target_concept = self._resolve_import_target(
-                        target_name, result.file_path, existing, simple_to_fqns
+                        target_name, concept_file_path, existing, simple_to_fqns
                     )
                     if target_concept is None:
                         stats.edges_skipped += 1
@@ -359,14 +366,14 @@ class GraphBuilder:
         # Python parser also sets bases but also emits Relationship(kind="inherits"),
         # so the existing_edge_keys guard prevents double-creation.
         for cls in result.classes:
-            class_fqn = symbol_fqn(result.file_path, cls.name)
+            class_fqn = symbol_fqn(concept_file_path, cls.name)
             class_concept = existing.get(class_fqn)
             if class_concept is None:
                 continue
 
             for base in cls.bases:
                 base_concept = self._resolve_base(
-                    base, result.file_path, existing, simple_to_fqns
+                    base, concept_file_path, existing, simple_to_fqns
                 )
                 if base_concept is None:
                     stats.edges_skipped += 1
@@ -427,6 +434,15 @@ class GraphBuilder:
             return existing.get(fqns[0])
 
         return None
+
+    def _concept_path(self, file_path: Path) -> Path:
+        """Return the path used for concept naming (repo-relative when possible)."""
+        if self._repo_root is None:
+            return file_path
+        try:
+            return file_path.resolve().relative_to(self._repo_root)
+        except ValueError:
+            return file_path
 
     def _remove_existing_import_edges_for_module(
         self,

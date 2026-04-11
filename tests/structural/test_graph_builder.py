@@ -715,3 +715,27 @@ class TestIntegration:
 
         concept_names = {c.name for c in store.list_concepts()}
         assert str(fp) + "::MyClass::my_method" in concept_names
+
+
+class TestRelativePathConceptNames:
+    """Story 14.2: concept names should be repo-relative when repo_root is provided."""
+
+    def test_repo_relative_names_used_for_module_and_symbol(
+        self, store: SQLiteStore, tmp_path: Path
+    ) -> None:
+        repo_root = tmp_path / "repo"
+        fp = repo_root / "packages" / "cli" / "src" / "lib" / "orchestrator.ts"
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        fp.write_text("class PipelineOrchestrator {}\n", encoding="utf-8")
+
+        cls = _cls("PipelineOrchestrator", fp, start=1, end=1)
+        builder = GraphBuilder(store, git_head=FAKE_GIT_HEAD, repo_root=repo_root)
+        builder.build([_make_result(fp, classes=[cls], source=b"class PipelineOrchestrator {}\n", language="typescript")])
+
+        names = {c.name for c in store.list_concepts()}
+        expected_module = "packages/cli/src/lib/orchestrator.ts"
+        expected_class = "packages/cli/src/lib/orchestrator.ts::PipelineOrchestrator"
+
+        assert expected_module in names
+        assert expected_class in names
+        assert not any(name.startswith(str(repo_root)) for name in names)

@@ -157,7 +157,7 @@ def _cmd_init(args: argparse.Namespace) -> None:
     # ------------------------------------------------------------------
     # Step 7 — Build the knowledge graph (concepts + edges)
     # ------------------------------------------------------------------
-    builder = GraphBuilder(store=store, git_head=git_head)
+    builder = GraphBuilder(store=store, git_head=git_head, repo_root=repo_path)
     build_result = builder.build(parse_results)
 
     print(
